@@ -150,7 +150,127 @@ def match_project(
     country: str | None = None,
     platform: str | None = None,
 ) -> dict[str, Any]:
-    raise NotImplementedError()
+    init_db(_db_path())
+
+    def project_budget_tier(b: int) -> int:
+        if b < 200_000:
+            return 1
+        if b <= 2_000_000:
+            return 2
+        return 3
+
+    proj_tier = project_budget_tier(int(budget_usd))
+    stage = stage.strip().lower()
+    genre_terms = [t.lower() for t in genre.replace("-", " ").split() if len(t) >= 3]
+    country_norm = country.strip() if country else None
+
+    prefer_sections: set[str] = set()
+    if stage in {"concept", "prototype"}:
+        prefer_sections = {"E", "F", "G"}
+    elif stage in {"vertical_slice", "alpha", "beta"}:
+        prefer_sections = {"A", "B", "C"}
+
+    with connect(_db_path()) as conn:
+        rows = conn.execute("SELECT * FROM entities;").fetchall()
+
+    excluded = 0
+    scored: list[dict[str, Any]] = []
+
+    for r in rows:
+        sec = r["section"]
+        ent_country = r["country"]
+        ent_tier = r["budget_tier"]
+        ent_class = r["class_tier"] or ""
+
+        # hard filter: budget tiers too far away
+        if ent_tier is not None and abs(int(ent_tier) - proj_tier) >= 2:
+            excluded += 1
+            continue
+
+        # hard filter: grants out of country (usually pointless)
+        if sec == "G" and country_norm and ent_country and ent_country != country_norm:
+            excluded += 1
+            continue
+
+        score = 0
+        reasons: list[str] = []
+
+        if ent_tier is not None:
+            d = abs(int(ent_tier) - proj_tier)
+            if d == 0:
+                score += 30
+                reasons.append(f"budget match: tier {proj_tier}")
+            elif d == 1:
+                score += 10
+                reasons.append(f"budget near-match: tier {ent_tier} vs {proj_tier}")
+
+        if country_norm and ent_country and ent_country == country_norm:
+            if sec == "G":
+                score += 90
+                reasons.append(f"{country_norm} grant")
+            else:
+                score += 12
+                reasons.append(f"country match: {country_norm}")
+
+        if prefer_sections:
+            if sec in prefer_sections:
+                score += 10
+                reasons.append(f"stage fit: {stage} → section {sec}")
+            elif stage in {"concept", "prototype"} and sec in {"A", "B"}:
+                score -= 5
+
+        if r["comm_rating"]:
+            score += int(r["comm_rating"]) * 4
+            reasons.append(f"comm rating: {r['comm_rating']}★")
+
+        if r["has_warning"]:
+            score -= 15
+            reasons.append("reputation warning")
+
+        # genre match heuristic (deterministic, no LLM)
+        hay = " ".join(
+            [
+                (r["notable_titles"] or ""),
+                (r["notes"] or ""),
+                (r["name"] or ""),
+            ]
+        ).lower()
+        hits = [t for t in genre_terms if t in hay]
+        if hits:
+            score += min(15, 3 * len(hits))
+            reasons.append(f"genre keywords: {', '.join(sorted(set(hits)))}")
+
+        # keep AAA $3 publishers from dominating indie/mid budgets unless clear genre fit
+        if proj_tier <= 2 and sec == "A" and str(ent_tier) == "3" and not hits:
+            score -= 25
+            reasons.append("too high-budget for project (no genre fit)")
+
+        if platform:
+            # placeholder for later refinement; deterministic but currently no strong signal in data
+            pass
+
+        scored.append(
+            {
+                "slug": r["slug"],
+                "name": r["name"],
+                "country": ent_country,
+                "section": sec,
+                "budget_tier": ent_tier,
+                "comm_rating": r["comm_rating"],
+                "has_warning": bool(r["has_warning"]),
+                "headline": (r["notes"] or "")[:80] + ("…" if (r["notes"] and len(r["notes"]) > 80) else ""),
+                "score": int(score),
+                "reasons": reasons,
+            }
+        )
+
+    scored.sort(key=lambda x: (x["score"], x["comm_rating"] or 0), reverse=True)
+    candidates = scored[:15]
+    return {
+        "candidates": candidates,
+        "excluded_count": excluded,
+        "scoring_note": "Deterministic heuristic scoring (budget tier, country, stage section fit, comm, warnings, keyword hits).",
+    }
 
 
 def get_submission_brief(slug: str) -> dict[str, Any]:
