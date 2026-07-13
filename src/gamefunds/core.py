@@ -665,5 +665,14 @@ def list_pipeline(*, status: str | None = None, stale_days: int | None = None) -
 
 
 def gamefunds_help(topic: str) -> str:
-    raise NotImplementedError()
+    topic = topic.strip().lower()
+    allowed = {"sections", "scoring", "statuses", "tiers", "workflows", "troubleshooting"}
+    if topic not in allowed:
+        raise ValueError(f"Unknown topic: {topic}")
+
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    path = root / "data" / "help" / f"{topic}.md"
+    return path.read_text(encoding="utf-8")
 
