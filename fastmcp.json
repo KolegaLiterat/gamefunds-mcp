@@ -1,0 +1,6 @@
+{
+  "name": "gamefunds-mcp",
+  "version": "0.1.0",
+  "description": "GameFunds funding directory + pipeline (stdio now, HTTP later)"
+}
+

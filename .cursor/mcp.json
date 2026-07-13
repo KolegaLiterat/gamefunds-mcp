@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gamefunds": {
+      "command": "python",
+      "args": ["-m", "gamefunds.server"],
+      "cwd": "${workspaceFolder}/gamefunds-mcp"
+    }
+  }
+}
+
