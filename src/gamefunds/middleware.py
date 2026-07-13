@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastmcp.server.middleware import Middleware
+from fastmcp.tools.tool import ToolResult
 
 
 def _approx_tokens(obj: Any) -> int:
@@ -32,34 +33,41 @@ class TokenGuardMiddleware(Middleware):
     async def on_call_tool(self, context, call_next):
         result = await call_next(context)
 
-        # FastMCP tool result is typically JSON-serializable; we only truncate a common pattern
-        tokens = _approx_tokens(result)
+        payload: Any = result
+        if isinstance(result, ToolResult) and isinstance(result.structured_content, dict):
+            payload = result.structured_content
+
+        tokens = _approx_tokens(payload)
         if tokens <= self.max_tokens:
             return result
 
-        if isinstance(result, dict) and isinstance(result.get("results"), list):
-            full = result["results"]
+        if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+            full = payload["results"]
             total = len(full)
             shown = total
 
             # truncate progressively
             truncated = list(full)
-            while truncated and _approx_tokens({**result, "results": truncated}) > self.max_tokens:
-                truncated = truncated[: max(1, int(len(truncated) * 0.8))]
+            while truncated and _approx_tokens({**payload, "results": truncated}) > self.max_tokens:
+                new_len = max(1, int(len(truncated) * 0.8))
+                if new_len >= len(truncated):
+                    break
+                truncated = truncated[:new_len]
             shown = len(truncated)
 
-            return {
-                **result,
+            new_payload = {
+                **payload,
                 "results": truncated,
                 "truncated": True,
                 "shown": shown,
                 "total": total,
                 "hint": "zawęź filtry albo użyj offset",
             }
+            return ToolResult(structured_content=new_payload)
 
         # fallback: attach a hint, don't attempt lossy truncation on unknown shapes
-        if isinstance(result, dict):
-            return {**result, "truncated": True, "hint": "wynik zbyt duży — zawęź zapytanie"}
+        if isinstance(payload, dict):
+            return ToolResult(structured_content={**payload, "truncated": True, "hint": "wynik zbyt duży — zawęź zapytanie"})
         return result
 
 

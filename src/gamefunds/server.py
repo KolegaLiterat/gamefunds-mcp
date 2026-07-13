@@ -8,6 +8,8 @@ This module must remain a thin transport layer delegating to `gamefunds.core`.
 
 from fastmcp import FastMCP
 
+import os
+
 from . import core
 from .guides import register_guides
 from .middleware import LoggingMiddleware, TokenGuardMiddleware
@@ -17,7 +19,8 @@ from .sync import check_updates as _check_updates, sync_directory as _sync_direc
 def build_server() -> FastMCP:
     server = FastMCP("GameFunds")
 
-    server.add_middleware(TokenGuardMiddleware(max_tokens=2000))
+    max_tokens = int(os.getenv("GAMEFUNDS_MAX_TOOL_TOKENS", "2000"))
+    server.add_middleware(TokenGuardMiddleware(max_tokens=max_tokens))
     server.add_middleware(LoggingMiddleware(log_path="data/tool_calls.log"))
 
     register_guides(server)
