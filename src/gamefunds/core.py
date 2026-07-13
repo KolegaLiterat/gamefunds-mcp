@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import date, datetime, timezone
 from typing import Any
@@ -274,11 +275,129 @@ def match_project(
 
 
 def get_submission_brief(slug: str) -> dict[str, Any]:
-    raise NotImplementedError()
+    data = get_entity(slug)
+    e = data["entity"]
+
+    pitch = (e.get("pitch") or "").strip()
+    contact = (e.get("contact") or "").strip()
+    notes = (e.get("notes") or "").strip()
+
+    channel = "unknown"
+    target = None
+    if pitch:
+        if "@" in pitch:
+            channel = "email"
+            target = pitch
+        if "form" in pitch.lower() or "portal" in pitch.lower():
+            channel = "form"
+            target = pitch
+    if channel == "unknown" and contact and "@" in contact:
+        channel = "email"
+        target = contact
+
+    text = notes
+    # sentence-ish split
+    parts = [p.strip() for p in re.split(r"[.;]\s+|\n+", text) if p.strip()]
+
+    hard_filters: list[str] = []
+    stated_criteria: list[str] = []
+    warnings: list[str] = []
+
+    hard_patterns = [
+        re.compile(r"^only\s", re.I),
+        re.compile(r"^strictly\s+no\s", re.I),
+        re.compile(r"\bno\s+sandbox\b", re.I),
+        re.compile(r"\bminimum\b", re.I),
+        re.compile(r"\bcurrently signing\b", re.I),
+        re.compile(r"\bat capacity\b", re.I),
+        re.compile(r"\bnot taking\b", re.I),
+    ]
+
+    for p in parts:
+        if "⚠️" in p or "warning" in p.lower() or "due diligence" in p.lower():
+            warnings.append(p.replace("⚠️", "").strip())
+            continue
+        if any(rx.search(p) for rx in hard_patterns):
+            hard_filters.append(p)
+        else:
+            stated_criteria.append(p)
+
+    portfolio = []
+    if e.get("notable_titles"):
+        portfolio = [t.strip() for t in str(e["notable_titles"]).split(",") if t.strip()]
+
+    return {
+        "slug": e["slug"],
+        "name": e["name"],
+        "channel": channel,
+        "target": target,
+        "stated_criteria": stated_criteria,
+        "hard_filters": hard_filters,
+        "warnings": warnings,
+        "portfolio": portfolio,
+        "comm_rating": e.get("comm_rating"),
+    }
 
 
 def get_pitch_rubric(*, target_slug: str | None = None, funding_type: str | None = None) -> dict[str, Any]:
-    raise NotImplementedError()
+    # funding_type inference
+    if not funding_type and target_slug:
+        ent = get_entity(target_slug)["entity"]
+        sec = ent.get("section")
+        if sec == "E":
+            funding_type = "vc_equity"
+        elif sec == "G":
+            funding_type = "grant"
+        else:
+            funding_type = "publisher"
+    funding_type = funding_type or "publisher"
+
+    def slide(n: int, title: str, must: list[str], weight: int, mistakes: list[str]):
+        return {
+            "n": n,
+            "title": title,
+            "must_contain": must,
+            "weight": weight,
+            "common_mistakes": mistakes,
+        }
+
+    if funding_type == "vc_equity":
+        slides = [
+            slide(1, "Vision", ["one-liner", "why now"], 3, ["vague vision"]),
+            slide(2, "Market", ["target audience", "comps"], 3, ["no TAM/SOM context"]),
+            slide(3, "Team", ["team size", "track record"], 3, ["missing roles"]),
+            slide(4, "Traction", ["wishlist", "demo metrics"], 4, ["no proof points"]),
+            slide(5, "Business model", ["price", "LTV/ARPU assumptions"], 3, ["no unit economics"]),
+            slide(6, "Roadmap", ["milestones", "timeline"], 3, ["no dates"]),
+            slide(7, "Funding", ["ask", "use of funds", "runway"], 5, ["no ask"]),
+            slide(8, "Risks", ["top risks", "mitigations"], 2, ["hand-wavy"]),
+        ]
+    elif funding_type == "grant":
+        slides = [
+            slide(1, "Project summary", ["one-liner", "scope"], 3, ["unclear scope"]),
+            slide(2, "Eligibility", ["region/company eligibility"], 5, ["no eligibility match"]),
+            slide(3, "Budget", ["cost breakdown", "requested amount"], 5, ["no cost breakdown"]),
+            slide(4, "Timeline", ["milestones", "deliverables"], 4, ["no deliverables"]),
+            slide(5, "Impact", ["regional/cultural impact", "jobs"], 4, ["no impact argument"]),
+            slide(6, "Team", ["roles", "capacity"], 3, ["missing capacity proof"]),
+        ]
+    else:  # publisher
+        slides = [
+            slide(1, "Hook", ["one-liner", "genre", "USP"], 4, ["no hook"]),
+            slide(2, "Game", ["core loop", "pillars"], 5, ["no core loop"]),
+            slide(3, "Audience", ["target player", "comps"], 3, ["no comps"]),
+            slide(4, "Production", ["team size", "timeline"], 4, ["no timeline"]),
+            slide(5, "Budget & ask", ["budget", "ask", "recoup / rev share"], 5, ["no numbers"]),
+            slide(6, "Traction", ["wishlist", "playtest", "demo"], 4, ["no traction"]),
+            slide(7, "Build", ["build link", "vertical slice"], 4, ["no build link"]),
+        ]
+
+    target_specific: list[str] = []
+    if target_slug:
+        brief = get_submission_brief(target_slug)
+        target_specific = (brief.get("hard_filters") or []) + (brief.get("warnings") or [])
+
+    return {"funding_type": funding_type, "slides": slides, "target_specific": target_specific}
 
 
 def review_pitch(
@@ -287,7 +406,94 @@ def review_pitch(
     target_slug: str | None = None,
     funding_type: str | None = None,
 ) -> dict[str, Any]:
-    raise NotImplementedError()
+    rubric = get_pitch_rubric(target_slug=target_slug, funding_type=funding_type)
+    slides = rubric["slides"]
+
+    text = deck_markdown or ""
+    lower = text.lower()
+
+    # crude "slide" detection by headings
+    headings = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("#")]
+    slide_count = len(headings) if headings else 1
+    words = len(re.findall(r"\w+", text))
+
+    # build a map from heading title -> section text
+    sections: dict[str, str] = {}
+    current = "deck"
+    buf: list[str] = []
+    for ln in text.splitlines():
+        if ln.strip().startswith("#"):
+            sections[current] = "\n".join(buf).strip()
+            buf = []
+            current = re.sub(r"^#+\s*", "", ln).strip()
+        else:
+            buf.append(ln)
+    sections[current] = "\n".join(buf).strip()
+
+    def find_section_for(title: str) -> str:
+        # exact or substring match on heading keys
+        t = title.lower()
+        for h, body in sections.items():
+            if t == h.lower() or t in h.lower() or h.lower() in t:
+                return body
+        return ""
+
+    coverage: dict[str, str] = {}
+    hard_findings: list[dict[str, Any]] = []
+
+    for s in slides:
+        title = s["title"]
+        body = find_section_for(title)
+        if not body and title.lower() not in lower:
+            coverage[title] = "missing"
+            hard_findings.append({"severity": "major", "slide": title, "issue": "Missing required slide"})
+            continue
+
+        # thin: present but too short or misses must_contain keywords (best-effort)
+        body_words = len(re.findall(r"\w+", body)) if body else 0
+        must = [m.lower() for m in s.get("must_contain", [])]
+        has_must = any(m in (body.lower() if body else lower) for m in must) if must else True
+        if body_words and body_words < 20:
+            coverage[title] = "thin"
+            hard_findings.append({"severity": "minor", "slide": title, "issue": "Slide content is very short"})
+        elif must and not has_must:
+            coverage[title] = "thin"
+            hard_findings.append({"severity": "minor", "slide": title, "issue": "Missing key elements for this slide"})
+        else:
+            coverage[title] = "present"
+
+    # numeric checks
+    number_patterns = {
+        "budget": re.compile(r"\bbudget\b|\$\s*\d|\b€\s*\d", re.I),
+        "ask": re.compile(r"\bask\b|\braising\b|\bseeking\b", re.I),
+        "timeline": re.compile(r"\bQ[1-4]\b|\bmonth\b|\bweeks?\b|\b20\d{2}\b", re.I),
+        "team": re.compile(r"\bteam\b|\bpeople\b|\bdevs?\b", re.I),
+        "recoup": re.compile(r"\brecoup\b|\brev share\b|\bsplit\b", re.I),
+    }
+    for k, rx in number_patterns.items():
+        if not rx.search(text):
+            hard_findings.append({"severity": "major", "slide": None, "issue": f"Missing concrete {k} details"})
+
+    # build link checks
+    if not re.search(r"https?://", text):
+        hard_findings.append({"severity": "major", "slide": None, "issue": "Missing link to a build / demo / trailer"})
+
+    # target hard filters
+    if target_slug:
+        brief = get_submission_brief(target_slug)
+        hard = " ".join(brief.get("hard_filters") or []).lower()
+        if "no sandbox" in hard and "sandbox" in lower:
+            hard_findings.append({"severity": "blocker", "slide": None, "issue": "Violates target hard filter: no sandbox"})
+
+    if slide_count > 20:
+        hard_findings.append({"severity": "minor", "slide": None, "issue": "Deck is longer than 20 slides"})
+
+    return {
+        "hard_findings": hard_findings,
+        "coverage": coverage,
+        "rubric": rubric,
+        "deck_stats": {"slides": slide_count, "words": words},
+    }
 
 
 def set_status(
