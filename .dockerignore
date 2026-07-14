@@ -1,0 +1,21 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+dist
+build
+
+# never bake secrets or local state into the image
+.env
+data/*.db
+data/*.db-*
+data/guides
+*.log
+
+tests
+docs
+.cursor
