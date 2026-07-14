@@ -162,6 +162,7 @@
 | **JanduSoft** | Spain | [site](https://www.jandusoft.com) · [steam](https://store.steampowered.com/publisher/JanduSoft) | via site contact | Indie / `$` | Caveman Warriors, porting services | Porting + publishing. |
 | **Top Hat Studios** | USA | [site](https://tophat.studio) · [steam](https://store.steampowered.com/publisher/TopHatStudios) | via site contact | Indie / `$` | Sense, Athenian Rhapsody | Broad small-indie catalogue. |
 | **Forever Entertainment** | Poland | [site](https://forever-entertainment.com) · [steam](https://store.steampowered.com/publisher/ForeverEntertainment) | via site contact | Indie / `$ $$` | Panzer Dragoon Remake, The House of the Dead Remake | Remake specialist (SEGA licences). |
+| **Silesia Games** | Poland | [site](https://silesiagames.com) | via site contact | Porting house | — | Porting and localization services; not a genre publisher. |
 | **Assemble Entertainment** ⚠️ | Germany | [site](https://www.assemble-entertainment.com) · [steam](https://store.steampowered.com/publisher/assemble) | via site form | Indie / `$ $$` | Endzone, Leons Identität | Community/dev complaints about terms & marketing reported — due diligence advised. |
 | **No Gravity Games** ⚠️ | Poland | [site](https://nogravitygames.com) · [steam](https://store.steampowered.com/publisher/nogravitygames) | via site contact | Indie / `$` | Switch-focused catalogue | Unpaid revenue-share complaints reported by devs — due diligence advised. |
 | **Digerati** ⚠️ | USA | [site](https://digerati.games) · [steam](https://store.steampowered.com/publisher/DigeratiDistribution) | via site contact | Indie / `$` | Slain!, The Outbound Ghost | Developer lawsuit reported (The Outbound Ghost) — due diligence advised. |
@@ -181,6 +182,9 @@
 | **Forklift Interactive** | USA `[?]` | [site](https://forkliftinteractive.com) `[?]` | via site | New indie label | — | Listed in the sheet's startups band; verify status. |
 | **Rokaplay** | Germany | [site](https://www.rokaplay.com) | Asana form via site | Cozy/family specialist | SolarPunk, Super Dungeon Maker | Only cozy/family-friendly, Switch-suited games. |
 | **Mooneye Studios** | Germany | [site](https://www.mooneyestudios.com) | publishing@mooneyestudios.com | Cozy specialist | Lost Ember, Haven Park | Cozy/casual games. |
+| **Feardemic** | Poland | [site](https://feardemic.com) | via site | Horror only — we publish horror | World of Horror | Pure horror label. |
+| **Black Lantern Collective** | USA | [site](https://blacklanterncollective.com) | via site | Horror only — we publish horror | Malevolence, Dark Deity 2 | Pure horror label. |
+| **Retrovibe** | France | [site](https://retrovibe.com) | via site | Boomer shooters, retro feel | Prodeus | Boomer shooter specialist. |
 | **TARK** | UK/Turkey | [site](https://tarkgames.com) | via site | Publisher-investor hybrid | 10+ upcoming titles | Early funding + go-to-market for solo/duo/trio teams. |
 | **Astra Logical** | USA | [site](https://astralogical.org) | via site | Boutique label | Star Stuff | Management/automation/simulation niche. |
 

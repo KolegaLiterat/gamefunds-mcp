@@ -41,11 +41,20 @@ async def test_tools_work_through_mcp_layer(tmp_path, monkeypatch):
 @pytest.mark.anyio
 async def test_resources_read(tmp_path, monkeypatch):
     monkeypatch.setenv("GAMEFUNDS_DB_PATH", str(tmp_path / "t.db"))
+    guides = tmp_path / "guides"
+    guides.mkdir()
+    (guides / "Definitions.md").write_text("# synced definitions", encoding="utf-8")
+    (guides / "DefinitionsPL.md").write_text("# synced definitions PL", encoding="utf-8")
+
+    import gamefunds.guides as guides_mod
+
+    monkeypatch.setattr(guides_mod, "guides_dir", lambda: guides)
+
     server = build_server()
     client = Client(server)
     async with client:
-        contents = await client.read_resource("gamefunds://guide/definitions")
-        assert contents
-        assert hasattr(contents[0], "text")
-        assert isinstance(contents[0].text, str)
+        en = await client.read_resource("gamefunds://guide/definitions")
+        pl = await client.read_resource("gamefunds://guide/definitions/pl")
+        assert en[0].text == "# synced definitions"
+        assert pl[0].text == "# synced definitions PL"
 

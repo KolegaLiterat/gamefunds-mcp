@@ -5,13 +5,34 @@ import os
 import re
 import sqlite3
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from .db import DEFAULT_DB_PATH, connect, init_db
+from .db import DEFAULT_DB_PATH, connect, ensure_db
+from .match_scoring import (
+    assess_budget_scale,
+    assess_genre_coverage,
+    candidate_confidence,
+    compute_catalog_budget_scale,
+    corpus_text,
+    country_match_score,
+    entity_genre_haystack,
+    entity_specialty_text,
+    extract_hard_filters_from_text,
+    prepare_genre_query,
+    parse_genre_query,
+    score_genre_match,
+    split_submission_parts,
+    violates_genre_exclusivity,
+)
+from .fts_query import build_fts5_match_query, is_fts_query_error
+from .rubric_parser import FUNDING_TYPES, infer_funding_type
+
+from .rubrics import load_rubrics
 
 
-def _db_path():
-    return DEFAULT_DB_PATH.__class__(os.getenv("GAMEFUNDS_DB_PATH", str(DEFAULT_DB_PATH)))
+def _db_path() -> Path:
+    return Path(os.getenv("GAMEFUNDS_DB_PATH", str(DEFAULT_DB_PATH)))
 
 
 def _entity_brief(row: sqlite3.Row) -> dict[str, Any]:
@@ -38,26 +59,50 @@ def _clamp_limit(limit: int) -> int:
 
 
 def search_funding(query: str, *, limit: int = 15, offset: int = 0) -> dict[str, Any]:
-    init_db(_db_path())
+    """Full-text search over the funding directory (FTS5).
+
+    Accepts arbitrary plain-text queries. Hyphens, slashes, ampersands, colons,
+    and parentheses are safe — compound genre labels like ``turn-based``,
+    ``free-to-play``, ``AAA/AA``, and ``hack & slash`` are normalized to spaced
+    phrases before matching.
+
+    Supported syntax (after sanitization):
+    - Multiple terms are OR-ed (union of matches, bm25-ranked).
+    - Double-quoted input phrases, e.g. ``"cozy games"``, search as a literal phrase.
+    - Prefix search: a trailing asterisk on an alphanumeric token, e.g. ``pixel*``.
+
+    Empty or punctuation-only queries return ``{total_matched: 0, results: []}``
+    without raising an error.
+    """
+    ensure_db(_db_path())
     limit = _clamp_limit(limit)
     offset = max(offset, 0)
 
-    with connect(_db_path()) as conn:
-        total = conn.execute(
-            "SELECT COUNT(*) AS n FROM entities_fts WHERE entities_fts MATCH ?;",
-            (query,),
-        ).fetchone()["n"]
-        rows = conn.execute(
-            """
-            SELECT e.*
-            FROM entities_fts
-            JOIN entities e ON e.rowid = entities_fts.rowid
-            WHERE entities_fts MATCH ?
-            ORDER BY bm25(entities_fts)
-            LIMIT ? OFFSET ?;
-            """,
-            (query, limit, offset),
-        ).fetchall()
+    fts_query = build_fts5_match_query(query)
+    if fts_query is None:
+        return {"total_matched": 0, "results": []}
+
+    try:
+        with connect(_db_path()) as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) AS n FROM entities_fts WHERE entities_fts MATCH ?;",
+                (fts_query,),
+            ).fetchone()["n"]
+            rows = conn.execute(
+                """
+                SELECT e.*
+                FROM entities_fts
+                JOIN entities e ON e.rowid = entities_fts.rowid
+                WHERE entities_fts MATCH ?
+                ORDER BY bm25(entities_fts)
+                LIMIT ? OFFSET ?;
+                """,
+                (fts_query, limit, offset),
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if is_fts_query_error(exc):
+            return {"total_matched": 0, "results": []}
+        raise
 
     return {"total_matched": int(total), "results": [_entity_brief(r) for r in rows]}
 
@@ -73,7 +118,7 @@ def filter_funding(
     limit: int = 15,
     offset: int = 0,
 ) -> dict[str, Any]:
-    init_db(_db_path())
+    ensure_db(_db_path())
     limit = _clamp_limit(limit)
     offset = max(offset, 0)
 
@@ -125,7 +170,7 @@ def filter_funding(
 
 
 def get_entity(slug: str) -> dict[str, Any]:
-    init_db(_db_path())
+    ensure_db(_db_path())
     with connect(_db_path()) as conn:
         r = conn.execute("SELECT * FROM entities WHERE slug = ?;", (slug,)).fetchone()
         if not r:
@@ -150,8 +195,27 @@ def match_project(
     *,
     country: str | None = None,
     platform: str | None = None,
+    limit_per_type: int = 3,
 ) -> dict[str, Any]:
-    init_db(_db_path())
+    """Score directory entities and return top matches grouped by funding path.
+
+    Scores are comparable only within each funding_type group (publisher, grant,
+    vc_equity, project_investor). Returns up to ``limit_per_type`` candidates per
+    group (default 3, maximum 10).
+
+    ``hard_filtered`` counts entities removed by budget-tier, grant-country, or genre
+    exclusivity rules. ``below_cutoff`` counts scored entities not returned because
+    of ``limit_per_type``.
+
+    ``budget_usd`` must be positive. The catalog has meaningful budget resolution
+    roughly between parsed ``amount_min_usd`` / ``amount_max_usd`` bounds (typically
+    ~$5k–$5M). Outside that scale ``budget_signal`` is ``above_range`` or
+    ``below_range`` and all candidates get ``confidence: low``.
+    """
+    if int(budget_usd) <= 0:
+        raise ValueError("budget_usd must be a positive integer (USD).")
+
+    ensure_db(_db_path())
 
     def project_budget_tier(b: int) -> int:
         if b < 200_000:
@@ -162,7 +226,6 @@ def match_project(
 
     proj_tier = project_budget_tier(int(budget_usd))
     stage = stage.strip().lower()
-    genre_terms = [t.lower() for t in genre.replace("-", " ").split() if len(t) >= 3]
     country_norm = country.strip() if country else None
 
     prefer_sections: set[str] = set()
@@ -174,81 +237,147 @@ def match_project(
     with connect(_db_path()) as conn:
         rows = conn.execute("SELECT * FROM entities;").fetchall()
 
-    excluded = 0
+    budget_scale = compute_catalog_budget_scale(rows)
+    budget_signal, budget_warning = assess_budget_scale(int(budget_usd), budget_scale)
+
+    prepared = prepare_genre_query(genre, rows)
+    genre_phrases = prepared.phrases
+    genre_tokens = prepared.tokens
+    primary_genre_tokens = prepared.primary_tokens
+    exclusivity_phrases, exclusivity_tokens, _, _ = parse_genre_query(genre)
+    corpus = corpus_text(rows)
+    genre_signal, genre_terms, genre_warning = assess_genre_coverage(
+        prepared.significant_terms,
+        corpus,
+    )
+    corpus_has_genre = genre_signal == "good"
+    hard_filtered = 0
     scored: list[dict[str, Any]] = []
 
     for r in rows:
         sec = r["section"]
+        ft = infer_funding_type(sec)
         ent_country = r["country"]
         ent_tier = r["budget_tier"]
-        ent_class = r["class_tier"] or ""
+        amount_min = r["amount_min_usd"]
+        amount_max = r["amount_max_usd"]
 
-        # hard filter: budget tiers too far away
+        if violates_genre_exclusivity(exclusivity_phrases, exclusivity_tokens, r):
+            hard_filtered += 1
+            continue
+
+        if ent_tier is None and amount_max is not None:
+            ent_tier = budget_tier_from_amount_max(int(amount_max))
+        elif ent_tier is None and amount_min is not None:
+            ent_tier = budget_tier_from_amount_max(int(amount_min))
+
         if ent_tier is not None and abs(int(ent_tier) - proj_tier) >= 2:
-            excluded += 1
+            hard_filtered += 1
             continue
 
-        # hard filter: grants out of country (usually pointless)
         if sec == "G" and country_norm and ent_country and ent_country != country_norm:
-            excluded += 1
+            hard_filtered += 1
             continue
 
-        score = 0
+        breakdown: dict[str, int | None] = {
+            "budget": None,
+            "country": 0,
+            "stage": 0,
+            "comm": 0,
+            "genre": 0,
+            "penalty": 0,
+        }
         reasons: list[str] = []
+        has_budget_data = ent_tier is not None or amount_min is not None or amount_max is not None
+        budget_confirmed = False
 
         if ent_tier is not None:
             d = abs(int(ent_tier) - proj_tier)
             if d == 0:
-                score += 30
+                breakdown["budget"] = 25
+                budget_confirmed = True
                 reasons.append(f"budget match: tier {proj_tier}")
             elif d == 1:
-                score += 10
+                breakdown["budget"] = 8
                 reasons.append(f"budget near-match: tier {ent_tier} vs {proj_tier}")
+        elif amount_min is not None or amount_max is not None:
+            if amount_max is not None and int(budget_usd) <= int(amount_max):
+                if amount_min is not None and int(budget_usd) >= int(amount_min):
+                    breakdown["budget"] = 25
+                    budget_confirmed = True
+                    reasons.append(
+                        f"within parsed budget range (${amount_min:,}–${amount_max:,})"
+                    )
+                else:
+                    breakdown["budget"] = 20
+                    budget_confirmed = True
+                    reasons.append(f"within parsed budget ceiling (${amount_max:,})")
+            elif amount_min is not None and int(budget_usd) >= int(amount_min):
+                breakdown["budget"] = 10
+                reasons.append(f"above parsed budget floor (${amount_min:,})")
+            else:
+                breakdown["budget"] = 0
+                breakdown["penalty"] -= 10
+                reasons.append("budget range may not fit project ask")
+        else:
+            breakdown["budget"] = None
+            reasons.append("budget data unavailable")
 
-        if country_norm and ent_country and ent_country == country_norm:
+        country_pts = country_match_score(
+            funding_type=ft,
+            section=sec,
+            country_norm=country_norm,
+            ent_country=ent_country,
+            has_budget_data=has_budget_data,
+        )
+        if country_pts:
+            breakdown["country"] = country_pts
             if sec == "G":
-                score += 90
                 reasons.append(f"{country_norm} grant")
             else:
-                score += 12
                 reasons.append(f"country match: {country_norm}")
 
+        stage_fit = False
         if prefer_sections:
             if sec in prefer_sections:
-                score += 10
+                breakdown["stage"] = 14
+                stage_fit = True
                 reasons.append(f"stage fit: {stage} → section {sec}")
             elif stage in {"concept", "prototype"} and sec in {"A", "B"}:
-                score -= 5
+                breakdown["penalty"] -= 5
+                reasons.append("stage mismatch for early project")
 
         if r["comm_rating"]:
-            score += int(r["comm_rating"]) * 4
+            breakdown["comm"] = int(r["comm_rating"]) * 4
             reasons.append(f"comm rating: {r['comm_rating']}★")
 
         if r["has_warning"]:
-            score -= 15
+            breakdown["penalty"] -= 15
             reasons.append("reputation warning")
 
-        # genre match heuristic (deterministic, no LLM)
-        hay = " ".join(
-            [
-                (r["notable_titles"] or ""),
-                (r["notes"] or ""),
-                (r["name"] or ""),
-            ]
-        ).lower()
-        hits = [t for t in genre_terms if t in hay]
-        if hits:
-            score += min(15, 3 * len(hits))
-            reasons.append(f"genre keywords: {', '.join(sorted(set(hits)))}")
+        genre_hay = entity_genre_haystack(r)
+        specialty_text = entity_specialty_text(r)
+        if corpus_has_genre:
+            genre_pts, genre_reasons, primary_genre_rank = score_genre_match(
+                genre_phrases,
+                genre_tokens,
+                genre_hay,
+                funding_type=ft,
+                specialty_text=specialty_text,
+                primary_tokens=primary_genre_tokens,
+                noise_tokens=prepared.noise_tokens,
+            )
+        else:
+            genre_pts, genre_reasons, primary_genre_rank = 0, [], 0
+        if genre_pts:
+            breakdown["genre"] = genre_pts
+            reasons.extend(genre_reasons)
 
-        # keep AAA $3 publishers from dominating indie/mid budgets unless clear genre fit
-        if proj_tier <= 2 and sec == "A" and str(ent_tier) == "3" and not hits:
-            score -= 25
+        if proj_tier <= 2 and sec == "A" and str(ent_tier) == "3" and genre_pts == 0:
+            breakdown["penalty"] -= 25
             reasons.append("too high-budget for project (no genre fit)")
 
-        if platform:
-            # placeholder for later refinement; deterministic but currently no strong signal in data
-            pass
+        score = _score_from_breakdown(breakdown)
 
         scored.append(
             {
@@ -256,22 +385,107 @@ def match_project(
                 "name": r["name"],
                 "country": ent_country,
                 "section": sec,
+                "funding_type": ft,
                 "budget_tier": ent_tier,
+                "amount_min_usd": amount_min,
+                "amount_max_usd": amount_max,
                 "comm_rating": r["comm_rating"],
                 "has_warning": bool(r["has_warning"]),
                 "headline": (r["notes"] or "")[:80] + ("…" if (r["notes"] and len(r["notes"]) > 80) else ""),
                 "score": int(score),
+                "breakdown": breakdown,
+                "confidence": "medium",
                 "reasons": reasons,
+                "_budget_confirmed": budget_confirmed,
+                "_stage_fit": stage_fit,
+                "_has_budget_data": has_budget_data,
+                "_primary_genre_rank": primary_genre_rank,
             }
         )
 
-    scored.sort(key=lambda x: (x["score"], x["comm_rating"] or 0), reverse=True)
-    candidates = scored[:15]
-    return {
-        "candidates": candidates,
-        "excluded_count": excluded,
-        "scoring_note": "Deterministic heuristic scoring (budget tier, country, stage section fit, comm, warnings, keyword hits).",
+    for item in scored:
+        b = item["breakdown"]
+        item.pop("_primary_genre_rank", None)
+        item["confidence"] = candidate_confidence(
+            genre_signal=genre_signal,
+            budget_signal=budget_signal,
+            budget_confirmed=item.pop("_budget_confirmed"),
+            stage_fit=item.pop("_stage_fit"),
+            genre_score=int(b.get("genre") or 0),
+            has_budget_data=item.pop("_has_budget_data"),
+            budget_score=int(b.get("budget") or 0),
+            country_score=int(b.get("country") or 0),
+            funding_type=item["funding_type"],
+        )
+
+    cap = min(10, max(1, int(limit_per_type)))
+    buckets: dict[str, list[dict[str, Any]]] = {ft: [] for ft in FUNDING_TYPES}
+    for item in scored:
+        buckets[item["funding_type"]].append(item)
+
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    group_notes: dict[str, str] = {}
+    below_cutoff = 0
+    for ft in FUNDING_TYPES:
+        ranked = sorted(
+            buckets[ft],
+            key=lambda x: (x["score"], x.get("_primary_genre_rank", 0), x["comm_rating"] or 0),
+            reverse=True,
+        )
+        by_type[ft] = ranked[:cap]
+        below_cutoff += max(0, len(ranked) - len(by_type[ft]))
+        if not by_type[ft]:
+            group_notes[ft] = _match_group_empty_reason(
+                ft,
+                country=country_norm,
+                stage=stage,
+            )
+        elif len(by_type[ft]) < cap:
+            group_notes[ft] = (
+                f"Showing all {len(by_type[ft])} matching {ft.replace('_', ' ')} "
+                f"entries for this query (limit_per_type={cap})."
+            )
+
+    result: dict[str, Any] = {
+        "by_type": by_type,
+        "hard_filtered": hard_filtered,
+        "below_cutoff": below_cutoff,
+        "genre_signal": genre_signal,
+        "genre_terms": genre_terms,
+        "budget_signal": budget_signal,
+        "note": (
+            "These are separate funding paths, not competing options. "
+            "Scores are comparable only within each group."
+        ),
     }
+    if genre_warning:
+        result["genre_warning"] = genre_warning
+    if budget_warning:
+        result["budget_warning"] = budget_warning
+    if group_notes:
+        result["group_notes"] = group_notes
+    return result
+
+
+def _score_from_breakdown(breakdown: dict[str, int | None]) -> int:
+    total = sum(v for v in breakdown.values() if isinstance(v, int))
+    return max(0, total)
+
+
+def _match_group_empty_reason(funding_type: str, *, country: str | None, stage: str) -> str:
+    labels = {
+        "publisher": "publishers",
+        "grant": "grants",
+        "vc_equity": "VC/equity investors",
+        "project_investor": "project investors",
+    }
+    label = labels.get(funding_type, funding_type)
+    parts = [f"No matching {label} in the directory after budget/stage filters."]
+    if funding_type == "grant" and country:
+        parts.append(f"Country filter for grants: {country}.")
+    if stage:
+        parts.append(f"Stage: {stage}.")
+    return " ".join(parts)
 
 
 def get_submission_brief(slug: str) -> dict[str, Any]:
@@ -281,46 +495,96 @@ def get_submission_brief(slug: str) -> dict[str, Any]:
     pitch = (e.get("pitch") or "").strip()
     contact = (e.get("contact") or "").strip()
     notes = (e.get("notes") or "").strip()
+    eligibility = (e.get("eligibility") or "").strip()
+    backing = (e.get("backing") or "").strip()
+    funding_terms = (e.get("funding_terms") or "").strip()
+    target_scope = (e.get("target_scope") or "").strip()
+    terms_raw = (e.get("terms_raw") or "").strip()
+    submit_links: list[dict[str, str]] = []
+    if e.get("submit_links_json"):
+        try:
+            submit_links = json.loads(e["submit_links_json"])
+        except json.JSONDecodeError:
+            submit_links = []
+    links: list[dict[str, str]] = []
+    if e.get("links_json"):
+        try:
+            links = json.loads(e["links_json"])
+        except json.JSONDecodeError:
+            links = []
 
     channel = "unknown"
     target = None
-    if pitch:
-        if "@" in pitch:
+
+    def _apply_channel_from_link(link: dict[str, str]) -> None:
+        nonlocal channel, target
+        url = (link.get("url") or "").strip()
+        label = (link.get("label") or "").lower()
+        if not url:
+            return
+        if "@" in url:
             channel = "email"
-            target = pitch
-        if "form" in pitch.lower() or "portal" in pitch.lower():
+            target = url
+        elif "form" in label or "apply" in label or "portal" in label or "application" in label:
             channel = "form"
-            target = pitch
-    if channel == "unknown" and contact and "@" in contact:
+            target = url
+        elif channel == "unknown":
+            channel = "link"
+            target = url
+
+    for link in submit_links:
+        _apply_channel_from_link(link)
+        if channel in {"form", "email"}:
+            break
+
+    def _apply_channel(value: str, *, prefer_form: bool = False) -> None:
+        nonlocal channel, target
+        if not value:
+            return
+        lower = value.lower()
+        if "@" in value:
+            channel = "email"
+            target = value
+        elif prefer_form or "form" in lower or "portal" in lower or "application" in lower:
+            channel = "form"
+            target = value
+        elif channel == "unknown" and ("http://" in lower or "https://" in lower or lower.startswith("[") or "site" in lower):
+            channel = "link"
+            target = value
+
+    if channel == "unknown":
+        _apply_channel(pitch, prefer_form=True)
+    if channel == "unknown":
+        _apply_channel(contact)
+    if channel == "unknown" and links:
+        for link in links:
+            url = (link.get("url") or "").strip()
+            label = (link.get("label") or "").strip()
+            if url:
+                channel = "link"
+                target = url
+                if "form" in label.lower() or "apply" in label.lower() or "portal" in label.lower():
+                    channel = "form"
+                break
+    if channel == "unknown" and e.get("contact_email"):
         channel = "email"
-        target = contact
+        target = e["contact_email"]
 
     text = notes
-    # sentence-ish split
-    parts = [p.strip() for p in re.split(r"[.;]\s+|\n+", text) if p.strip()]
+    parts = split_submission_parts(text, eligibility=eligibility)
+    hard_filters = extract_hard_filters_from_text(text, eligibility=eligibility)
+    hard_set = set(hard_filters)
 
-    hard_filters: list[str] = []
     stated_criteria: list[str] = []
     warnings: list[str] = []
-
-    hard_patterns = [
-        re.compile(r"^only\s", re.I),
-        re.compile(r"^strictly\s+no\s", re.I),
-        re.compile(r"\bno\s+sandbox\b", re.I),
-        re.compile(r"\bminimum\b", re.I),
-        re.compile(r"\bcurrently signing\b", re.I),
-        re.compile(r"\bat capacity\b", re.I),
-        re.compile(r"\bnot taking\b", re.I),
-    ]
 
     for p in parts:
         if "⚠️" in p or "warning" in p.lower() or "due diligence" in p.lower():
             warnings.append(p.replace("⚠️", "").strip())
             continue
-        if any(rx.search(p) for rx in hard_patterns):
-            hard_filters.append(p)
-        else:
-            stated_criteria.append(p)
+        if p in hard_set:
+            continue
+        stated_criteria.append(p)
 
     portfolio = []
     if e.get("notable_titles"):
@@ -331,6 +595,12 @@ def get_submission_brief(slug: str) -> dict[str, Any]:
         "name": e["name"],
         "channel": channel,
         "target": target,
+        "eligibility": eligibility or None,
+        "backing": backing or None,
+        "funding_terms": funding_terms or None,
+        "target_scope": target_scope or None,
+        "terms_raw": terms_raw or None,
+        "submit_links": submit_links or None,
         "stated_criteria": stated_criteria,
         "hard_filters": hard_filters,
         "warnings": warnings,
@@ -340,64 +610,214 @@ def get_submission_brief(slug: str) -> dict[str, Any]:
 
 
 def get_pitch_rubric(*, target_slug: str | None = None, funding_type: str | None = None) -> dict[str, Any]:
-    # funding_type inference
+    bundle = load_rubrics(db_path=_db_path())
+    base = bundle.data
+    tailoring = base.get("tailoring") or {}
+
     if not funding_type and target_slug:
         ent = get_entity(target_slug)["entity"]
-        sec = ent.get("section")
-        if sec == "E":
-            funding_type = "vc_equity"
-        elif sec == "G":
-            funding_type = "grant"
-        else:
-            funding_type = "publisher"
+        funding_type = infer_funding_type(ent.get("section"))
     funding_type = funding_type or "publisher"
+    if funding_type not in tailoring:
+        raise ValueError(
+            f"Invalid funding_type: {funding_type}. "
+            f"Expected one of: {', '.join(sorted(tailoring))}"
+        )
 
-    def slide(n: int, title: str, must: list[str], weight: int, mistakes: list[str]):
-        return {
-            "n": n,
-            "title": title,
-            "must_contain": must,
-            "weight": weight,
-            "common_mistakes": mistakes,
-        }
-
-    if funding_type == "vc_equity":
-        slides = [
-            slide(1, "Vision", ["one-liner", "why now"], 3, ["vague vision"]),
-            slide(2, "Market", ["target audience", "comps"], 3, ["no TAM/SOM context"]),
-            slide(3, "Team", ["team size", "track record"], 3, ["missing roles"]),
-            slide(4, "Traction", ["wishlist", "demo metrics"], 4, ["no proof points"]),
-            slide(5, "Business model", ["price", "LTV/ARPU assumptions"], 3, ["no unit economics"]),
-            slide(6, "Roadmap", ["milestones", "timeline"], 3, ["no dates"]),
-            slide(7, "Funding", ["ask", "use of funds", "runway"], 5, ["no ask"]),
-            slide(8, "Risks", ["top risks", "mitigations"], 2, ["hand-wavy"]),
-        ]
-    elif funding_type == "grant":
-        slides = [
-            slide(1, "Project summary", ["one-liner", "scope"], 3, ["unclear scope"]),
-            slide(2, "Eligibility", ["region/company eligibility"], 5, ["no eligibility match"]),
-            slide(3, "Budget", ["cost breakdown", "requested amount"], 5, ["no cost breakdown"]),
-            slide(4, "Timeline", ["milestones", "deliverables"], 4, ["no deliverables"]),
-            slide(5, "Impact", ["regional/cultural impact", "jobs"], 4, ["no impact argument"]),
-            slide(6, "Team", ["roles", "capacity"], 3, ["missing capacity proof"]),
-        ]
-    else:  # publisher
-        slides = [
-            slide(1, "Hook", ["one-liner", "genre", "USP"], 4, ["no hook"]),
-            slide(2, "Game", ["core loop", "pillars"], 5, ["no core loop"]),
-            slide(3, "Audience", ["target player", "comps"], 3, ["no comps"]),
-            slide(4, "Production", ["team size", "timeline"], 4, ["no timeline"]),
-            slide(5, "Budget & ask", ["budget", "ask", "recoup / rev share"], 5, ["no numbers"]),
-            slide(6, "Traction", ["wishlist", "playtest", "demo"], 4, ["no traction"]),
-            slide(7, "Build", ["build link", "vertical slice"], 4, ["no build link"]),
-        ]
-
+    fit = tailoring[funding_type]
     target_specific: list[str] = []
     if target_slug:
         brief = get_submission_brief(target_slug)
         target_specific = (brief.get("hard_filters") or []) + (brief.get("warnings") or [])
 
-    return {"funding_type": funding_type, "slides": slides, "target_specific": target_specific}
+    out: dict[str, Any] = {
+        "funding_type": funding_type,
+        "slide_range": base.get("slide_range", [10, 20]),
+        "slides": base.get("slides", []),
+        "emphasize": fit.get("emphasize", []),
+        "deemphasize": fit.get("deemphasize", []),
+        "common_mistakes": base.get("common_mistakes", []),
+        "design_rules": base.get("design_rules", []),
+        "target_specific": target_specific,
+        "rubric_stale": bundle.stale,
+        "rubric_synced_at": bundle.synced_at,
+    }
+    return out
+
+
+_SEVERITY_ORDER = {"blocker": 0, "major": 1, "minor": 2}
+
+
+def _sort_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.get("severity"), 99))
+
+
+_DEEMPHASIZE_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
+    "publisher": [
+        ("exit strategy", re.compile(r"\bexit\b", re.I)),
+        ("market tam", re.compile(r"\btam\b|total addressable market", re.I)),
+        ("company vision", re.compile(r"\bfive[- ]year\b|\bstudio vision\b|\blong[- ]term vision\b", re.I)),
+    ],
+    "project_investor": [
+        ("long-term studio vision", re.compile(r"\blong[- ]term studio\b|\bfive[- ]year plan\b", re.I)),
+        ("sequels", re.compile(r"\bsequel\b", re.I)),
+        ("art philosophy", re.compile(r"\bart philosophy\b|\baesthetic philosophy\b", re.I)),
+    ],
+    "vc_equity": [
+        ("deep mechanics", re.compile(r"\bcore loop\b|\bmechanics\b", re.I)),
+        ("level design", re.compile(r"\blevel design\b", re.I)),
+        ("art pipelines", re.compile(r"\bart pipeline\b", re.I)),
+    ],
+    "grant": [
+        ("revenue projections", re.compile(r"\brevenue projection\b|\best\.?\s*revenue\b|\bgross revenue\b", re.I)),
+        ("roi", re.compile(r"\broi\b|return on investment", re.I)),
+        ("hype language", re.compile(r"\brevolutionary\b|\bgroundbreaking\b|\bdisruptive\b", re.I)),
+    ],
+}
+
+
+def _deemphasize_findings(funding_type: str, text: str, deemphasize: list[str]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    patterns = _DEEMPHASIZE_PATTERNS.get(funding_type, [])
+    lower = text.lower()
+    for phrase in deemphasize:
+        phrase_lower = phrase.lower()
+        matched = False
+        for label, rx in patterns:
+            if label in phrase_lower or phrase_lower in label:
+                if rx.search(text):
+                    matched = True
+                    findings.append(
+                        {
+                            "severity": "minor",
+                            "slide": None,
+                            "issue": f"De-emphasized for {funding_type}: {phrase}",
+                        }
+                    )
+                break
+        if not matched and len(phrase_lower) > 6 and phrase_lower in lower:
+            findings.append(
+                {
+                    "severity": "minor",
+                    "slide": None,
+                    "issue": f"De-emphasized for {funding_type}: {phrase}",
+                }
+            )
+    return findings
+
+
+def _normalize_slide_title(title: str) -> str:
+    t = title.lower()
+    t = re.sub(r"[^a-z0-9 ]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _slide_titles_match(rubric_title: str, deck_title: str) -> bool:
+    r = _normalize_slide_title(rubric_title)
+    d = _normalize_slide_title(deck_title)
+    if not r or not d:
+        return False
+    if r == d or r in d or d in r:
+        return True
+    r_tokens = set(r.split())
+    d_tokens = set(d.split())
+    if len(r_tokens & d_tokens) >= min(2, len(r_tokens)):
+        return True
+    if ("hook" in r or "title" in r) and ("hook" in d or "title" in d):
+        return True
+    if "budget" in r and "ask" in r and "budget" in d and "ask" in d:
+        return True
+    if "market" in r and "compar" in r and ("market" in d or "compar" in d):
+        return True
+    if "usp" in r and "usp" in d:
+        return True
+    if "look" in r and "feel" in r and "look" in d:
+        return True
+    if "production" in r and "plan" in r and "production" in d:
+        return True
+    return False
+
+
+def _parse_deck_sections(text: str) -> tuple[dict[str, str], list[str]]:
+    sections: dict[str, str] = {}
+    headings: list[str] = []
+    lines = text.splitlines()
+    i = 0
+    first_h1 = True
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped.startswith("#"):
+            i += 1
+            continue
+        level = len(stripped) - len(stripped.lstrip("#"))
+        title = re.sub(r"^#+\s*", "", stripped).strip()
+        i += 1
+        buf: list[str] = []
+        while i < len(lines):
+            if lines[i].strip().startswith("#"):
+                break
+            buf.append(lines[i])
+            i += 1
+        body = "\n".join(buf).strip()
+        headings.append(title)
+        sections[title] = body
+        if level == 1 and first_h1:
+            sections["Title / Hook"] = body
+            first_h1 = False
+    return sections, headings
+
+
+def _find_deck_section(rubric_title: str, sections: dict[str, str]) -> str:
+    if rubric_title in sections:
+        return sections[rubric_title]
+    for heading, body in sections.items():
+        if _slide_titles_match(rubric_title, heading):
+            return body
+    return ""
+
+
+def _slide_thin_issue(rubric_title: str, body: str) -> str | None:
+    if not body.strip():
+        return None
+    tl = rubric_title.lower()
+    if "market" in tl and "compar" in tl:
+        has_number = bool(re.search(r"\d", body))
+        items = [p.strip() for p in re.split(r"[,;\n|·•]+", body) if p.strip()]
+        if not has_number or len(items) < 3:
+            return "Missing key elements for this slide"
+        return None
+    if "traction" in tl:
+        if not re.search(r"\d", body):
+            return "Missing key elements for this slide"
+        return None
+    if tl.startswith("team") or tl == "team":
+        bl = body.lower()
+        team_signals = (
+            "shipped",
+            "copies",
+            "released",
+            " programmer",
+            " producer",
+            " designer",
+            "lead ",
+            " titles",
+            "mod",
+            "jam",
+        )
+        if not any(s in bl for s in team_signals):
+            return "Missing key elements for this slide"
+        return None
+    if "hook" in tl or "title" in tl:
+        bl = body.lower()
+        if "fans of" not in bl and not re.search(r"\bfor fans\b", bl):
+            return "Missing key elements for this slide"
+        return None
+    if "budget" in tl and "ask" in tl:
+        if not re.search(r"\bask\b|\bbudget\b|\$\s*\d|\b€\s*\d|\d+\s*k\b", body, re.I):
+            return "Missing key elements for this slide"
+        return None
+    return None
 
 
 def review_pitch(
@@ -405,95 +825,81 @@ def review_pitch(
     *,
     target_slug: str | None = None,
     funding_type: str | None = None,
+    include_rubric: bool = False,
 ) -> dict[str, Any]:
     rubric = get_pitch_rubric(target_slug=target_slug, funding_type=funding_type)
     slides = rubric["slides"]
+    slide_range = rubric.get("slide_range") or [10, 20]
 
     text = deck_markdown or ""
     lower = text.lower()
 
-    # crude "slide" detection by headings
-    headings = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("#")]
-    slide_count = len(headings) if headings else 1
+    sections, headings = _parse_deck_sections(text)
+    slide_count = len(headings) if headings else (1 if text.strip() else 0)
     words = len(re.findall(r"\w+", text))
-
-    # build a map from heading title -> section text
-    sections: dict[str, str] = {}
-    current = "deck"
-    buf: list[str] = []
-    for ln in text.splitlines():
-        if ln.strip().startswith("#"):
-            sections[current] = "\n".join(buf).strip()
-            buf = []
-            current = re.sub(r"^#+\s*", "", ln).strip()
-        else:
-            buf.append(ln)
-    sections[current] = "\n".join(buf).strip()
-
-    def find_section_for(title: str) -> str:
-        # exact or substring match on heading keys
-        t = title.lower()
-        for h, body in sections.items():
-            if t == h.lower() or t in h.lower() or h.lower() in t:
-                return body
-        return ""
 
     coverage: dict[str, str] = {}
     hard_findings: list[dict[str, Any]] = []
 
     for s in slides:
         title = s["title"]
-        body = find_section_for(title)
-        if not body and title.lower() not in lower:
+        body = _find_deck_section(title, sections)
+        if not body:
             coverage[title] = "missing"
             hard_findings.append({"severity": "major", "slide": title, "issue": "Missing required slide"})
             continue
 
-        # thin: present but too short or misses must_contain keywords (best-effort)
-        body_words = len(re.findall(r"\w+", body)) if body else 0
-        must = [m.lower() for m in s.get("must_contain", [])]
-        has_must = any(m in (body.lower() if body else lower) for m in must) if must else True
-        if body_words and body_words < 20:
+        thin_issue = _slide_thin_issue(title, body)
+        if thin_issue:
             coverage[title] = "thin"
-            hard_findings.append({"severity": "minor", "slide": title, "issue": "Slide content is very short"})
-        elif must and not has_must:
-            coverage[title] = "thin"
-            hard_findings.append({"severity": "minor", "slide": title, "issue": "Missing key elements for this slide"})
+            hard_findings.append({"severity": "minor", "slide": title, "issue": thin_issue})
         else:
             coverage[title] = "present"
 
-    # numeric checks
-    number_patterns = {
-        "budget": re.compile(r"\bbudget\b|\$\s*\d|\b€\s*\d", re.I),
-        "ask": re.compile(r"\bask\b|\braising\b|\bseeking\b", re.I),
-        "timeline": re.compile(r"\bQ[1-4]\b|\bmonth\b|\bweeks?\b|\b20\d{2}\b", re.I),
-        "team": re.compile(r"\bteam\b|\bpeople\b|\bdevs?\b", re.I),
-        "recoup": re.compile(r"\brecoup\b|\brev share\b|\bsplit\b", re.I),
-    }
-    for k, rx in number_patterns.items():
-        if not rx.search(text):
-            hard_findings.append({"severity": "major", "slide": None, "issue": f"Missing concrete {k} details"})
+    min_slides, max_slides = slide_range[0], slide_range[1]
+    if slide_count < min_slides:
+        hard_findings.append(
+            {
+                "severity": "major",
+                "slide": None,
+                "issue": f"Deck has fewer than {min_slides} slides (tutorial expects {min_slides}–{max_slides})",
+            }
+        )
+    if slide_count > max_slides:
+        hard_findings.append(
+            {
+                "severity": "minor",
+                "slide": None,
+                "issue": f"Deck is longer than {max_slides} slides (tutorial expects {min_slides}–{max_slides})",
+            }
+        )
 
-    # build link checks
+    if not re.search(r"\bask\b|\bbudget\b|\$\s*\d|\b€\s*\d", text, re.I):
+        hard_findings.append({"severity": "major", "slide": None, "issue": "Missing concrete budget / ask details"})
+
     if not re.search(r"https?://", text):
         hard_findings.append({"severity": "major", "slide": None, "issue": "Missing link to a build / demo / trailer"})
 
-    # target hard filters
+    hard_findings.extend(
+        _deemphasize_findings(rubric["funding_type"], text, rubric.get("deemphasize") or [])
+    )
+
     if target_slug:
         brief = get_submission_brief(target_slug)
         hard = " ".join(brief.get("hard_filters") or []).lower()
         if "no sandbox" in hard and "sandbox" in lower:
             hard_findings.append({"severity": "blocker", "slide": None, "issue": "Violates target hard filter: no sandbox"})
 
-    if slide_count > 20:
-        hard_findings.append({"severity": "minor", "slide": None, "issue": "Deck is longer than 20 slides"})
-
-    return {
-        "hard_findings": hard_findings,
+    out: dict[str, Any] = {
+        "hard_findings": _sort_findings(hard_findings),
         "coverage": coverage,
-        "rubric": rubric,
         "deck_stats": {"slides": slide_count, "words": words},
+        "rubric_stale": rubric.get("rubric_stale", False),
+        "rubric_synced_at": rubric.get("rubric_synced_at"),
     }
+    if include_rubric:
+        out["rubric"] = rubric
+    return out
 
 
 def set_status(
@@ -504,7 +910,7 @@ def set_status(
     next_followup: str | None = None,
     note: str | None = None,
 ) -> dict[str, Any]:
-    init_db(_db_path())
+    ensure_db(_db_path())
     allowed = {"not_contacted", "contacted", "in_talks", "rejected", "signed", "passed"}
     if status not in allowed:
         raise ValueError(f"Invalid status: {status}")
@@ -551,7 +957,7 @@ def set_status(
 
 
 def add_note(slug: str, note: str) -> dict[str, Any]:
-    init_db(_db_path())
+    ensure_db(_db_path())
     today = date.today().isoformat()
     now = datetime.now(timezone.utc).isoformat()
     note = note.strip()
@@ -584,7 +990,7 @@ def add_note(slug: str, note: str) -> dict[str, Any]:
 
 
 def list_pipeline(*, status: str | None = None, stale_days: int | None = None) -> dict[str, Any]:
-    init_db(_db_path())
+    ensure_db(_db_path())
 
     where = []
     params: list[Any] = []
@@ -665,14 +1071,89 @@ def list_pipeline(*, status: str | None = None, stale_days: int | None = None) -
 
 
 def gamefunds_help(topic: str) -> str:
-    topic = topic.strip().lower()
-    allowed = {"sections", "scoring", "statuses", "tiers", "workflows", "troubleshooting"}
-    if topic not in allowed:
-        raise ValueError(f"Unknown topic: {topic}")
 
-    from pathlib import Path
+    from .guides import GUIDE_SPECS, guides_dir
+
+    topic_norm = topic.strip().lower()
+
+    help_topics = {
+        "sections": "sections.md",
+        "scoring": "scoring.md",
+        "statuses": "statuses.md",
+        "tiers": "tiers.md",
+        "workflows": "workflows.md",
+        "troubleshooting": "troubleshooting.md",
+    }
+    guide_topics = {
+        "funding-types": "FundingTypes.md",
+        "definitions": "Definitions.md",
+        "pitch-deck": "PitchDeckTutorial.md",
+    }
 
     root = Path(__file__).resolve().parents[2]
-    path = root / "data" / "help" / f"{topic}.md"
-    return path.read_text(encoding="utf-8")
+
+    if topic_norm == "guides":
+        return _guides_index()
+
+    if topic_norm in help_topics:
+        return (root / "data" / "help" / help_topics[topic_norm]).read_text(encoding="utf-8")
+
+    if topic_norm in guide_topics:
+        path = guides_dir() / guide_topics[topic_norm]
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+        uri = next(s["uri"] for s in GUIDE_SPECS if s["local"] == guide_topics[topic_norm])
+        return (
+            f"Poradnik `{topic_norm}` nie jest jeszcze zsynchronizowany lokalnie.\n\n"
+            f"Odczytaj resource `{uri}` albo uruchom `sync_directory(dry_run=False)`.\n\n"
+            + _topic_catalog(help_topics, guide_topics)
+        )
+
+    return _topic_catalog(help_topics, guide_topics, unknown=topic_norm or None)
+
+
+def _topic_catalog(
+    help_topics: dict[str, str],
+    guide_topics: dict[str, str],
+    *,
+    unknown: str | None = None,
+) -> str:
+    lines = ["## Dostępne tematy `gamefunds_help`", ""]
+    if unknown is not None:
+        lines.append(f'Nieznany temat: "{unknown}". Wybierz jeden z poniższych.')
+        lines.append("")
+    lines.extend(
+        [
+            "### Pomoc operacyjna",
+            "",
+            *[f"- `{name}`" for name in help_topics],
+            "",
+            "### Poradniki pojęć (to samo co `gamefunds://guide/*`)",
+            "",
+            "- `guides` — spis poradników i kiedy po nie sięgnąć",
+            *[f"- `{name}`" for name in guide_topics],
+            "",
+            "Pytania o publishing vs project investment vs equity, recoup, waterfall, vertical slice "
+            "lub strukturę pitch decka — wołaj `funding-types`, `definitions` lub `pitch-deck`. "
+            "Nie odpowiadaj z pamięci.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _guides_index() -> str:
+    return """## GameFunds guide resources (`gamefunds://guide/*`)
+
+Six long-form guides (EN + PL). Read these for **concepts** — not the directory listing.
+
+| Topic | `gamefunds_help` | Resource (EN) | Resource (PL) | What's inside |
+|---|---|---|---|---|
+| Funding types | `funding-types` | `gamefunds://guide/funding-types` | `gamefunds://guide/funding-types/pl` | Publishing deal vs **project investment** (revenue share in *one game*, no equity) vs **equity** (company shares). Which path to pick. |
+| Definitions | `definitions` | `gamefunds://guide/definitions` | `gamefunds://guide/definitions/pl` | Recoup, waterfall, dilution, vertical slice, milestone, net revenue, and other deal vocabulary. |
+| Pitch deck | `pitch-deck` | `gamefunds://guide/pitch-deck` | `gamefunds://guide/pitch-deck/pl` | Canonical slide structure, what each slide must contain, common mistakes. |
+
+**When to use:** any question about *what a deal type means*, *whether you give up company equity*, *how recoup works*, or *how to structure a deck* — fetch the guide here or via `read_resource`, then answer from that text.
+
+Operational help (sections A–G, scoring weights, pipeline statuses) stays in `gamefunds_help("sections")`, `"scoring"`, etc.
+"""
 
