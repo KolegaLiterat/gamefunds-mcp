@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from .parser import parse_directory_markdown
 
@@ -27,18 +28,50 @@ ENTITY_COLUMNS = [
     "lifetime_rev_usd",
     "notable_titles",
     "notes",
+    "eligibility",
+    "backing",
+    "funding_terms",
+    "target_scope",
+    "terms_raw",
+    "submit_links_json",
+    "amount_raw",
+    "amount_min_usd",
+    "amount_max_usd",
     "has_warning",
     "raw_row",
 ]
 
+_EXTRA_ENTITY_COLUMNS = [
+    ("eligibility", "TEXT"),
+    ("backing", "TEXT"),
+    ("funding_terms", "TEXT"),
+    ("target_scope", "TEXT"),
+    ("terms_raw", "TEXT"),
+    ("submit_links_json", "TEXT"),
+    ("amount_raw", "TEXT"),
+    ("amount_min_usd", "INTEGER"),
+    ("amount_max_usd", "INTEGER"),
+]
 
-def connect(db_path: Path = DEFAULT_DB_PATH):
+
+_db_initialized: set[str] = set()
+
+
+@contextmanager
+def connect(db_path: Path = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.execute("PRAGMA journal_mode=WAL;")
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_db(db_path: Path = DEFAULT_DB_PATH) -> None:
@@ -62,6 +95,15 @@ def init_db(db_path: Path = DEFAULT_DB_PATH) -> None:
               lifetime_rev_usd INTEGER,
               notable_titles TEXT,
               notes TEXT,
+              eligibility TEXT,
+              backing TEXT,
+              funding_terms TEXT,
+              target_scope TEXT,
+              terms_raw TEXT,
+              submit_links_json TEXT,
+              amount_raw TEXT,
+              amount_min_usd INTEGER,
+              amount_max_usd INTEGER,
               has_warning BOOLEAN,
               raw_row TEXT
             );
@@ -101,6 +143,20 @@ def init_db(db_path: Path = DEFAULT_DB_PATH) -> None:
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
             """
         )
+        for col, typ in _EXTRA_ENTITY_COLUMNS:
+            try:
+                conn.execute(f"ALTER TABLE entities ADD COLUMN {col} {typ};")
+            except sqlite3.OperationalError:
+                pass
+
+
+def ensure_db(db_path: Path = DEFAULT_DB_PATH) -> None:
+    """Initialize schema once per database path (idempotent)."""
+    key = str(db_path.resolve())
+    if key in _db_initialized:
+        return
+    init_db(db_path)
+    _db_initialized.add(key)
 
 
 def upsert_entities(rows: Iterable[dict[str, Any]], db_path: Path = DEFAULT_DB_PATH) -> dict[str, int]:
@@ -108,7 +164,7 @@ def upsert_entities(rows: Iterable[dict[str, Any]], db_path: Path = DEFAULT_DB_P
     Replace directory entities in a transaction (TRUNCATE + insert + rebuild FTS).
     Must NOT touch `pipeline` or `meta`.
     """
-    init_db(db_path)
+    ensure_db(db_path)
     rows = list(rows)
     counts: dict[str, int] = {}
 
