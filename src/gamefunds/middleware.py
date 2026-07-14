@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.tool import ToolResult
+
+_MAX_LOG_BYTES = 5 * 1024 * 1024
+_REDACT_STRING_LEN = 100
 
 
 def _approx_tokens(obj: Any) -> int:
@@ -15,8 +18,60 @@ def _approx_tokens(obj: Any) -> int:
         s = json.dumps(obj, ensure_ascii=False, default=str)
     except Exception:
         s = str(obj)
-    # very rough heuristic: ~4 chars per token
     return max(1, len(s) // 4)
+
+
+def _redact_for_log(value: Any) -> Any:
+    if isinstance(value, str):
+        if len(value) <= _REDACT_STRING_LEN:
+            return value
+        return f"<str:{len(value)} chars>"
+    if isinstance(value, dict):
+        return {k: _redact_for_log(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_for_log(v) for v in value]
+    return value
+
+
+def _rotate_log_if_needed(path: Path) -> None:
+    if not path.exists() or path.stat().st_size < _MAX_LOG_BYTES:
+        return
+    backup = path.with_name(path.name + ".1")
+    if backup.exists():
+        backup.unlink()
+    path.rename(backup)
+
+
+def _truncate_results_payload(payload: dict[str, Any], max_tokens: int) -> dict[str, Any] | None:
+    full = payload.get("results")
+    if not isinstance(full, list) or not full:
+        return None
+
+    lo, hi = 0, len(full)
+    best_len = 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = {**payload, "results": full[:mid]}
+        if _approx_tokens(candidate) <= max_tokens:
+            best_len = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    if best_len == 0:
+        trimmed = {**payload, "results": []}
+    else:
+        trimmed = {**payload, "results": full[:best_len]}
+
+    trimmed["shown"] = len(trimmed["results"])
+    trimmed["total"] = len(full)
+    trimmed["truncated"] = True
+    trimmed["hint"] = "zawęź filtry albo użyj offset"
+    if _approx_tokens(trimmed) > max_tokens:
+        trimmed["oversized"] = True
+        trimmed["tokens"] = _approx_tokens(trimmed)
+        trimmed["limit"] = max_tokens
+    return trimmed
 
 
 class TokenGuardMiddleware(Middleware):
@@ -42,32 +97,24 @@ class TokenGuardMiddleware(Middleware):
             return result
 
         if isinstance(payload, dict) and isinstance(payload.get("results"), list):
-            full = payload["results"]
-            total = len(full)
-            shown = total
+            trimmed = _truncate_results_payload(payload, self.max_tokens)
+            if trimmed is not None:
+                return ToolResult(structured_content=trimmed)
 
-            # truncate progressively
-            truncated = list(full)
-            while truncated and _approx_tokens({**payload, "results": truncated}) > self.max_tokens:
-                new_len = max(1, int(len(truncated) * 0.8))
-                if new_len >= len(truncated):
-                    break
-                truncated = truncated[:new_len]
-            shown = len(truncated)
-
-            new_payload = {
-                **payload,
-                "results": truncated,
-                "truncated": True,
-                "shown": shown,
-                "total": total,
-                "hint": "zawęź filtry albo użyj offset",
-            }
-            return ToolResult(structured_content=new_payload)
-
-        # fallback: attach a hint, don't attempt lossy truncation on unknown shapes
         if isinstance(payload, dict):
-            return ToolResult(structured_content={**payload, "truncated": True, "hint": "wynik zbyt duży — zawęź zapytanie"})
+            return ToolResult(
+                structured_content={
+                    **payload,
+                    "oversized": True,
+                    "tokens": tokens,
+                    "limit": self.max_tokens,
+                    "hint": (
+                        "Wynik przekracza limit tokenów i nie został obcięty. "
+                        "Zawęź zapytanie albo użyj węższego narzędzia "
+                        "(np. get_entity zamiast filter_funding, get_pitch_rubric zamiast pełnej rubryki w review_pitch)."
+                    ),
+                }
+            )
         return result
 
 
@@ -76,6 +123,7 @@ class LoggingMiddleware(Middleware):
 
     def __init__(self, *, log_path: str = "data/tool_calls.log"):
         self.log_path = log_path
+        self.log_args = os.getenv("GAMEFUNDS_LOG_ARGS", "0").strip().lower() in {"1", "true", "yes"}
 
     async def on_call_tool(self, context, call_next):
         start = time.perf_counter()
@@ -94,16 +142,18 @@ class LoggingMiddleware(Middleware):
             tool_name = getattr(msg, "name", None)
             args = getattr(msg, "arguments", None)
 
-            payload = {
+            payload: dict[str, Any] = {
                 "ts": time.time(),
                 "tool": tool_name,
                 "ok": ok,
                 "error": err,
                 "elapsed_ms": elapsed_ms,
-                "args": args,
             }
+            if self.log_args and args is not None:
+                payload["args"] = _redact_for_log(args)
 
             p = Path(self.log_path)
             p.parent.mkdir(parents=True, exist_ok=True)
+            _rotate_log_if_needed(p)
             with p.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")

@@ -42,7 +42,7 @@ async def test_default_calls_under_token_budget(tmp_path, monkeypatch):
 async def test_token_guard_truncates_when_limit_low(tmp_path, monkeypatch):
     db = tmp_path / "t.db"
     monkeypatch.setenv("GAMEFUNDS_DB_PATH", str(db))
-    monkeypatch.setenv("GAMEFUNDS_MAX_TOOL_TOKENS", "50")  # force truncation
+    monkeypatch.setenv("GAMEFUNDS_MAX_TOOL_TOKENS", "400")
 
     md = (Path(__file__).parent / "fixtures" / "directory_2026-07.md").read_text(encoding="utf-8")
     rows = parse_directory_markdown(md)
@@ -55,4 +55,82 @@ async def test_token_guard_truncates_when_limit_low(tmp_path, monkeypatch):
         out = (await client.call_tool("filter_funding", {"limit": 50, "offset": 0})).data
         assert out.get("truncated") is True
         assert out.get("shown") <= 50
+        assert out.get("oversized") is not True
+
+
+@pytest.mark.anyio
+async def test_token_guard_returns_truncated_payload_when_still_oversized(tmp_path, monkeypatch):
+    db = tmp_path / "t.db"
+    monkeypatch.setenv("GAMEFUNDS_DB_PATH", str(db))
+    monkeypatch.setenv("GAMEFUNDS_MAX_TOOL_TOKENS", "20")
+
+    md = (Path(__file__).parent / "fixtures" / "directory_2026-07.md").read_text(encoding="utf-8")
+    rows = parse_directory_markdown(md)
+    upsert_entities(rows, db_path=db)
+
+    server = build_server()
+    client = Client(server)
+
+    async with client:
+        out = (await client.call_tool("filter_funding", {"limit": 50, "offset": 0})).data
+        assert out.get("truncated") is True
+        assert out.get("shown", 0) < out.get("total", 0)
+        assert out.get("oversized") is True
+        assert approx_tokens(out) >= 20
+
+
+@pytest.mark.anyio
+async def test_match_project_default_fits_token_budget(tmp_path, monkeypatch):
+    db = tmp_path / "t.db"
+    monkeypatch.setenv("GAMEFUNDS_DB_PATH", str(db))
+
+    md = (Path(__file__).parent / "fixtures" / "directory_2026-07.md").read_text(encoding="utf-8")
+    rows = parse_directory_markdown(md)
+    upsert_entities(rows, db_path=db)
+
+    server = build_server()
+    client = Client(server)
+
+    async with client:
+        out = (
+            await client.call_tool(
+                "match_project",
+                {
+                    "genre": "cozy roguelike",
+                    "budget_usd": 75000,
+                    "stage": "vertical_slice",
+                    "country": "Poland",
+                },
+            )
+        ).data
+        assert approx_tokens(out) < 2000
+        assert out.get("oversized") is not True
+        assert out.get("truncated") is not True
+
+
+@pytest.mark.anyio
+async def test_review_pitch_default_fits_token_budget(tmp_path, monkeypatch):
+    db = tmp_path / "t.db"
+    monkeypatch.setenv("GAMEFUNDS_DB_PATH", str(db))
+
+    md = (Path(__file__).parent / "fixtures" / "directory_2026-07.md").read_text(encoding="utf-8")
+    rows = parse_directory_markdown(md)
+    upsert_entities(rows, db_path=db)
+
+    deck = "# Title / Hook\nTest deck.\n\n# Contact\nhttps://example.com/demo\n"
+
+    server = build_server()
+    client = Client(server)
+
+    async with client:
+        out = (
+            await client.call_tool(
+                "review_pitch",
+                {"deck_markdown": deck, "target_slug": "team17"},
+            )
+        ).data
+        assert "rubric" not in out
+        assert approx_tokens(out) < 2000
+        assert out.get("truncated") is not True
+        assert out.get("oversized") is not True
 
