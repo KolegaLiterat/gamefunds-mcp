@@ -58,7 +58,7 @@ async def test_gamefunds_help_docstring_points_to_guides():
     text = descriptions["gamefunds_help"].lower()
     assert "guides" in text
     assert "funding-types" in text
-    assert "nie odpowiadaj z pamięci" in text
+    assert "do not answer from memory" in text
 
 
 def test_gamefunds_help_funding_types_returns_guide_content():
@@ -69,13 +69,13 @@ def test_gamefunds_help_funding_types_returns_guide_content():
 
 def test_gamefunds_help_unknown_topic_returns_catalog_not_exception():
     text = gamefunds_help("funding-types-bzdura")
-    assert "Dostępne tematy" in text
+    assert "Available `gamefunds_help` topics" in text
     assert "funding-types" in text
 
 
 def test_gamefunds_help_empty_topic_returns_catalog_not_exception():
     text = gamefunds_help("")
-    assert "Dostępne tematy" in text
+    assert "Available `gamefunds_help` topics" in text
     assert "guides" in text
 
 

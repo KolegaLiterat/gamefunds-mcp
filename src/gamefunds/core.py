@@ -1102,8 +1102,8 @@ def gamefunds_help(topic: str) -> str:
             return path.read_text(encoding="utf-8")
         uri = next(s["uri"] for s in GUIDE_SPECS if s["local"] == guide_topics[topic_norm])
         return (
-            f"Poradnik `{topic_norm}` nie jest jeszcze zsynchronizowany lokalnie.\n\n"
-            f"Odczytaj resource `{uri}` albo uruchom `sync_directory(dry_run=False)`.\n\n"
+            f"Guide `{topic_norm}` is not synced locally yet.\n\n"
+            f"Read resource `{uri}` or run `sync_directory(dry_run=False)`.\n\n"
             + _topic_catalog(help_topics, guide_topics)
         )
 
@@ -1116,24 +1116,24 @@ def _topic_catalog(
     *,
     unknown: str | None = None,
 ) -> str:
-    lines = ["## Dostępne tematy `gamefunds_help`", ""]
+    lines = ["## Available `gamefunds_help` topics", ""]
     if unknown is not None:
-        lines.append(f'Nieznany temat: "{unknown}". Wybierz jeden z poniższych.')
+        lines.append(f'Unknown topic: "{unknown}". Choose one of the following.')
         lines.append("")
     lines.extend(
         [
-            "### Pomoc operacyjna",
+            "### Operational help",
             "",
             *[f"- `{name}`" for name in help_topics],
             "",
-            "### Poradniki pojęć (to samo co `gamefunds://guide/*`)",
+            "### Concept guides (same as `gamefunds://guide/*`)",
             "",
-            "- `guides` — spis poradników i kiedy po nie sięgnąć",
+            "- `guides` — index of guides and when to read them",
             *[f"- `{name}`" for name in guide_topics],
             "",
-            "Pytania o publishing vs project investment vs equity, recoup, waterfall, vertical slice "
-            "lub strukturę pitch decka — wołaj `funding-types`, `definitions` lub `pitch-deck`. "
-            "Nie odpowiadaj z pamięci.",
+            "Questions about publishing vs project investment vs equity, recoup, waterfall, vertical slice, "
+            "or pitch deck structure — call `funding-types`, `definitions`, or `pitch-deck`. "
+            "Do not answer from memory.",
         ]
     )
     return "\n".join(lines)

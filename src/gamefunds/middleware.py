@@ -83,7 +83,7 @@ def _truncate_results_payload(payload: dict[str, Any], max_tokens: int) -> dict[
     trimmed["shown"] = len(trimmed["results"])
     trimmed["total"] = len(full)
     trimmed["truncated"] = True
-    trimmed["hint"] = "zawęź filtry albo użyj offset"
+    trimmed["hint"] = "narrow filters or use offset"
     if _approx_tokens(trimmed) > max_tokens:
         trimmed["oversized"] = True
         trimmed["tokens"] = _approx_tokens(trimmed)
@@ -126,9 +126,10 @@ class TokenGuardMiddleware(Middleware):
                     "tokens": tokens,
                     "limit": self.max_tokens,
                     "hint": (
-                        "Wynik przekracza limit tokenów i nie został obcięty. "
-                        "Zawęź zapytanie albo użyj węższego narzędzia "
-                        "(np. get_entity zamiast filter_funding, get_pitch_rubric zamiast pełnej rubryki w review_pitch)."
+                        "Result exceeds the token limit and could not be trimmed. "
+                        "Narrow the query or use a lighter tool "
+                        "(e.g. get_entity instead of filter_funding, get_pitch_rubric instead of "
+                        "full rubric inside review_pitch)."
                     ),
                 }
             )

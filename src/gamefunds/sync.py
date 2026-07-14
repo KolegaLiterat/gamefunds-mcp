@@ -250,7 +250,7 @@ def sync_directory(*, dry_run: bool = True, full_diff: bool = False) -> dict[str
             parsed = parse_directory_markdown(md)
         except ParseError as e:
             parser_error = (
-                f"format repo się zmienił, parser wymaga aktualizacji (line {e.line_no}): {e} :: {e.raw_line}"
+                f"upstream format changed, parser needs an update (line {e.line_no}): {e} :: {e.raw_line}"
             )
 
         guide_result = _sync_guides(client, dry_run=dry_run, guide_status=guide_status)

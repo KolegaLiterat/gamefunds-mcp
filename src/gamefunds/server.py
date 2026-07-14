@@ -17,6 +17,7 @@ from .db import ensure_db
 from .paths import default_db_path
 from .guides import register_guides
 from .http_serve import run_http_server
+from .instructions import SERVER_INSTRUCTIONS
 from .middleware import LoggingMiddleware, ScopeMiddleware, TokenGuardMiddleware
 from .sync import check_updates as _check_updates, sync_directory as _sync_directory
 
@@ -27,7 +28,7 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
     ensure_db(default_db_path())
 
     auth = build_http_auth_verifier() if transport == "http" else None
-    server = FastMCP("GameFunds", auth=auth)
+    server = FastMCP("GameFunds", auth=auth, instructions=SERVER_INSTRUCTIONS)
 
     max_tokens = int(os.getenv("GAMEFUNDS_MAX_TOOL_TOKENS", "2000"))
     server.add_middleware(ScopeMiddleware(enforce=transport == "http"))
@@ -38,12 +39,12 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
 
     @server.tool()
     def search_funding(query: str, limit: int = 15, offset: int = 0) -> dict:
-        """Full-text po katalogu 225+ źródeł finansowania gier (nazwa, kraj, tytuły gier, notatki).
-        Używaj gdy znasz nazwę lub szukasz po słowie kluczowym ("roguelike", "Sweden", "Devolver",
-        "turn-based", "free-to-play", "AAA/AA"). Myślniki, ukośniki i nawiasy są bezpieczne.
-        NIE używaj do dopasowania projektu do funduszy — do tego jest `match_project`.
-        Zwraca: `{total_matched: int, results: [EntityBrief]}`. Brief nie zawiera pełnych
-        notatek ani linków — po nie zawołaj `get_entity(slug)`."""
+        """Full-text search across 225+ game funding sources (name, country, game titles, notes).
+        Use when you know a name or want a keyword ("roguelike", "Sweden", "Devolver",
+        "turn-based", "free-to-play", "AAA/AA"). Hyphens, slashes, and parentheses are safe.
+        Do NOT use this to match a project to funders — use `match_project` for that.
+        Returns: `{total_matched: int, results: [EntityBrief]}`. Briefs omit full notes and links —
+        call `get_entity(slug)` for those."""
         return core.search_funding(query, limit=limit, offset=offset)
 
     @server.tool()
@@ -57,12 +58,12 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
         limit: int = 15,
         offset: int = 0,
     ) -> dict:
-        """Filtrowanie po polach strukturalnych. Wszystkie argumenty opcjonalne.
-        `section`: A-G (zawołaj `gamefunds_help("sections")` jeśli nie wiesz co znaczą).
+        """Filter by structured fields. All arguments are optional.
+        `section`: A-G (call `gamefunds_help("sections")` if you need section meanings).
         `budget_tier`: 1=$ (<200k), 2=$%$ (200k-2M), 3=$%$$ (>2M).
-        `min_comm`: 1-3, jak dobrze odpowiadają na maile. `has_email`: tylko z mailem, bez formularzy.
-        Zwraca: `{total_matched, results: [EntityBrief], filters_applied}`.
-        Jeśli `total_matched` > 30, zawęź filtry zamiast stronicować."""
+        `min_comm`: 1-3, how responsive they are to email. `has_email`: email contact only, no web forms.
+        Returns: `{total_matched, results: [EntityBrief], filters_applied}`.
+        If `total_matched` > 30, narrow filters instead of paging."""
         return core.filter_funding(
             section=section,
             country=country,
@@ -76,11 +77,10 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
 
     @server.tool()
     def get_entity(slug: str) -> dict:
-        """Pełny rekord: wszystkie linki, pełne notatki, kontakt, ścieżka zgłoszenia,
-        ostrzeżenia reputacyjne, `terms_raw` (surowy tekst warunków finansowych z katalogu),
-        plus Twój stan pipeline dla tego podmiotu jeśli istnieje.
-        Wołaj dla 2-3 finalistów, nie dla całej listy kandydatów.
-        Zwraca: `Entity` (pełny) + `pipeline: PipelineState | null`."""
+        """Full record: all links, full notes, contact, submission path, reputation warnings,
+        `terms_raw` (raw financial terms text from the catalog), plus your pipeline state for
+        this entity if it exists. Call for 2-3 finalists only, not the whole candidate list.
+        Returns: full `Entity` + `pipeline: PipelineState | null`."""
         return core.get_entity(slug)
 
     @server.tool()
@@ -92,20 +92,21 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
         platform: str | None = None,
         limit_per_type: int = 3,
     ) -> dict:
-        """Dopasowuje projekt do źródeł finansowania. Deterministyczny scoring, NIE LLM.
+        """Match a project to funding sources. Deterministic scoring, NOT an LLM.
         `stage`: concept | prototype | vertical_slice | alpha | beta.
-        `limit_per_type`: ile kandydatów na grupę (domyślnie 3, max 10).
-        Zwraca kandydatów pogrupowanych po ścieżce finansowania — rekomendację
-        i uszeregowanie zrób sam na podstawie `reasons` i `confidence`, nie traktuj `score` jako wyroczni.
-        Zwraca: `{by_type: {publisher|grant|vc_equity|project_investor: [{...EntityBrief, score, confidence, breakdown, reasons}]},
+        `limit_per_type`: candidates per group (default 3, max 10).
+        Returns candidates grouped by funding path — you rank and recommend from `reasons` and
+        `confidence`; do not treat `score` as an oracle.
+        Returns: `{by_type: {publisher|grant|vc_equity|project_investor: [{...EntityBrief, score, confidence, breakdown, reasons}]},
         hard_filtered, below_cutoff, genre_signal, genre_terms, genre_warning?, budget_signal, budget_warning?, note}`.
-        `budget_usd` musi być dodatni. Katalog ma sensowną rozdzielczość budżetu w skali ~$5k–$5M (z danych amount_min/max).
-        Poza tą skalą `budget_signal` to `above_range` lub `below_range` (warning + wszyscy confidence=low).
+        `budget_usd` must be positive. The catalog has meaningful budget resolution around ~$5k-$5M
+        (from amount_min/max data). Outside that scale, `budget_signal` is `above_range` or
+        `below_range` (warning + all candidates confidence=low).
         `budget_signal`: in_range | above_range | below_range.
-        `genre_signal`: good (≥1 termin gatunku trafił w katalog) | none (zero trafień → warning, wszyscy confidence=low).
-        `genre_terms`: {matched, unmatched} — nietrafione terminy to informacja, nie kara.
-        `confidence`: low | medium | high per kandydat. `breakdown`: rozbicie punktów (genre, budget, country, stage, comm).
-        Granty (sekcja G) są filtrowane twardo po kraju — grant z innego kraju zwykle nie ma sensu."""
+        `genre_signal`: good (>=1 genre term hit the catalog) | none (zero hits -> warning, all confidence=low).
+        `genre_terms`: {matched, unmatched} — unmatched terms are informational, not a penalty.
+        `confidence`: low | medium | high per candidate. `breakdown`: points (genre, budget, country, stage, comm).
+        Grants (section G) are hard-filtered by country — a grant from another country usually does not apply."""
         return core.match_project(
             genre,
             budget_usd,
@@ -117,21 +118,21 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
 
     @server.tool()
     def get_submission_brief(slug: str) -> dict:
-        """Wszystko o tym, JAK zgłosić się do konkretnego podmiotu: kanał (mail vs formularz),
-        adres/link, `submit_links` (sparsowane linki zgłoszeniowe), ich deklarowane kryteria wyciągnięte z notatek ("Only $2M+ games",
-        "No sandbox games"), tier budżetowy, responsywność, ostrzeżenia, tytuły z portfolio
-        (do dopasowania tonu). Wołaj ZANIM zaczniesz pisać pitcha albo maila.
-        Zwraca: `{slug, name, channel, target, stated_criteria: [str], hard_filters: [str], warnings: [str],
+        """Everything about HOW to submit to a specific entity: channel (email vs web form),
+        address/link, `submit_links` (parsed submission URLs), stated criteria extracted from notes
+        ("Only $2M+ games", "No sandbox games"), budget tier, responsiveness, warnings, portfolio
+        titles (for tone matching). Call BEFORE writing a pitch or email.
+        Returns: `{slug, name, channel, target, stated_criteria: [str], hard_filters: [str], warnings: [str],
         portfolio: [str], comm_rating, terms_raw, submit_links}`."""
         return core.get_submission_brief(slug)
 
     @server.tool()
     def get_pitch_rubric(target_slug: str | None = None, funding_type: str | None = None) -> dict:
-        """Kanoniczna struktura pitch decka z PitchDeckTutorial.md: slajdy, co ma być na każdym,
-        wagi. Jeśli podasz `target_slug`, rubryka jest wzbogacona o kryteria tego podmiotu.
-        `funding_type`: publisher | vc_equity | grant | project_investor — RÓŻNE rubryki, grant chce czego innego niż VC.
-        To jest rubryka do pracy, nie tekst do wklejenia. Deck piszesz Ty, nie ten tool.
-        Zwraca: `{funding_type, slides: [{n, title, must_contain: [str], weight, common_mistakes: [str]}], target_specific: [str]}`."""
+        """Canonical pitch deck structure from PitchDeckTutorial.md: slides, what each must contain,
+        weights. If you pass `target_slug`, the rubric adds that entity's criteria.
+        `funding_type`: publisher | vc_equity | grant | project_investor — DIFFERENT rubrics; grants
+        want different content than VCs. This is a working rubric, not text to paste. You write the deck.
+        Returns: `{funding_type, slides: [{n, title, must_contain: [str], weight, common_mistakes: [str]}], target_specific: [str]}`."""
         return core.get_pitch_rubric(target_slug=target_slug, funding_type=funding_type)
 
     @server.tool()
@@ -141,16 +142,16 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
         funding_type: str | None = None,
         include_rubric: bool = False,
     ) -> dict:
-        """Twarde, deterministyczne sprawdzenie decka. NIE ocenia jakości — od tego jesteś Ty.
-        Sprawdza: brakujące wymagane slajdy, brak konkretnych liczb (budżet, ask, recoup,
-        timeline, wielkość zespołu), brak linku do buildu/vertical slice, długość decka,
-        naruszenia twardych filtrów targetu (np. sandbox game do Team17).
-        `include_rubric`: jeśli True, dołącza pełną rubrykę (`rubric`) do odpowiedzi — użyj gdy potrzebujesz
-        struktury slajdów w tym samym wywołaniu co review.
-        Zwraca: `{hard_findings: [{severity, slide, issue}], coverage: {slide_name: present|missing|thin},
+        """Hard, deterministic deck check. Does NOT judge quality — that is your job.
+        Checks: missing required slides, missing concrete numbers (budget, ask, recoup, timeline,
+        team size), missing build/vertical-slice link, deck length, target hard-filter violations
+        (e.g. sandbox game to Team17).
+        `include_rubric`: if True, attaches the full rubric (`rubric`) — use when you need slide
+        structure in the same call as the review.
+        Returns: `{hard_findings: [{severity, slide, issue}], coverage: {slide_name: present|missing|thin},
         deck_stats: {slides, words}, rubric?}`.
-        Po dostaniu wyniku: zrób ocenę jakościową sam, na podstawie `rubric` i `coverage`.
-        Format wejścia: markdown/tekst. Serwer nie parsuje PDF ani PPTX — wyekstrahuj tekst przed wywołaniem."""
+        After the result: do qualitative assessment yourself from `rubric` and `coverage`.
+        Input format: markdown/text. The server does not parse PDF or PPTX — extract text first."""
         return core.review_pitch(
             deck_markdown,
             target_slug=target_slug,
@@ -167,54 +168,54 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
         note: str | None = None,
     ) -> dict:
         """`status`: not_contacted | contacted | in_talks | rejected | signed | passed
-        (`passed` = Ty odpuściłeś, `rejected` = oni odmówili).
-        Notatki są DOPISYWANE z datą, nie nadpisywane. Zwraca: `PipelineState`."""
+        (`passed` = you dropped out, `rejected` = they declined).
+        Notes are APPENDED with a date, never overwritten. Returns: `PipelineState`."""
         return core.set_status(slug, status, project=project, next_followup=next_followup, note=note)
 
     @server.tool()
     def add_note(slug: str, note: str) -> dict:
-        """Dopisuje datowaną notatkę do wpisu pipeline bez zmiany statusu.
-        Używaj po rozmowie, mailu lub spotkaniu, gdy nie zmieniasz statusu — do zmiany statusu jest `set_status`.
-        Notatki są dopisywane z datą, nie nadpisywane. Zwraca: `{slug, note_count}`."""
+        """Append a dated note to a pipeline entry without changing status.
+        Use after a call, email, or meeting when status stays the same — use `set_status` to change status.
+        Notes are appended with a date, never overwritten. Returns: `{slug, note_count}`."""
         return core.add_note(slug, note)
 
     @server.tool()
     def list_pipeline(status: str | None = None, stale_days: int | None = None) -> dict:
-        """Twój stan zgłoszeń. `stale_days=30` → wpisy w contacted/in_talks bez ruchu >30 dni
-        lub z przeterminowanym follow-upem. Wołaj to na start sesji o fundraisingu.
-        Zwraca: `{by_status: {status: count}, entries: [{slug, name, status, last_contact, next_followup, days_stale, last_note}]}`."""
+        """Your submission tracker. `stale_days=30` -> contacted/in_talks entries idle >30 days
+        or with an overdue follow-up. Call at the start of a fundraising session.
+        Returns: `{by_status: {status: count}, entries: [{slug, name, status, last_contact, next_followup, days_stale, last_note}]}`."""
         return core.list_pipeline(status=status, stale_days=stale_days)
 
     @server.tool()
     def check_updates() -> dict:
-        """Tanie sprawdzenie czy repo źródłowe się zmieniło (tylko SHA commita, bez pobierania).
-        Zwraca: `{has_update, current_sha, last_synced_sha, last_synced_at, commit_message, commit_date}`."""
+        """Cheap check whether the upstream repo changed (commit SHA only, no download).
+        Returns: `{has_update, current_sha, last_synced_sha, last_synced_at, commit_message, commit_date}`."""
         return _check_updates()
 
     @server.tool()
     def sync_directory(dry_run: bool = True, full_diff: bool = False) -> dict:
-        """Pobiera i przeparsowuje katalog z GitHuba. Twoje dane pipeline NIE są ruszane.
-        Domyślnie `dry_run=True` — pokazuje co by się zmieniło. Zapis wymaga jawnego `dry_run=False`.
-        `full_diff=False` zwraca liczniki + 10 pierwszych zmian (diff może mieć setki wierszy).
-        Jeśli parser padnie, NIC nie jest zapisywane i dostajesz błąd z numerem linii.
-        Zwraca: `{has_update, added: int, removed: int, changed: int, sample: [...], applied: bool, parser_error?: str}`."""
+        """Fetch and parse the catalog from GitHub. Your pipeline data is NOT touched.
+        Default `dry_run=True` — shows what would change. Writing requires explicit `dry_run=False`.
+        `full_diff=False` returns counts + first 10 changes (diff can be hundreds of rows).
+        If the parser fails, NOTHING is saved and you get an error with a line number.
+        Returns: `{has_update, added: int, removed: int, changed: int, sample: [...], applied: bool, parser_error?: str}`."""
         return _sync_directory(dry_run=dry_run, full_diff=full_diff)
 
     @server.tool()
     def gamefunds_help(topic: str) -> str:
-        """Głęboka dokumentacja, wołaj gdy potrzebujesz szczegółów spoza opisów tools.
+        """Deep documentation when you need detail beyond tool descriptions.
 
-        Pytania o POJĘCIA (publishing vs project investment vs equity, recoup, dilution, waterfall,
-        vertical slice, struktura pitch decka) — NIE odpowiadaj z pamięci. Treść jest w resources
-        gamefunds://guide/*. Wołaj `gamefunds_help("guides")` po spis, albo bezpośrednio:
-        `funding-types`, `definitions`, `pitch-deck` (treść jak w resource).
+        Questions about CONCEPTS (publishing vs project investment vs equity, recoup, dilution, waterfall,
+        vertical slice, pitch deck structure) — do NOT answer from memory. Content lives in
+        gamefunds://guide/* resources. Call `gamefunds_help("guides")` for the index, or directly:
+        `funding-types`, `definitions`, `pitch-deck` (same content as the resource).
 
-        `topic`: sections (co znaczy A-G) | scoring (wagi w match_project) | statuses |
-        tiers (progi budżetowe i gwiazdki) | workflows (typowe ścieżki: od zera do shortlisty,
-        przygotowanie pitcha, przegląd pipeline'u) | troubleshooting (parser padł, co dalej) |
-        guides (spis poradników) | funding-types | definitions | pitch-deck.
-        Nieznany lub pusty topic zwraca listę dostępnych tematów — nigdy nie rzuca wyjątku.
-        Zwraca: markdown."""
+        `topic`: sections (A-G meanings) | scoring (match_project weights) | statuses |
+        tiers (budget tiers and stars) | workflows (typical paths: zero to shortlist, pitch prep,
+        pipeline review) | troubleshooting (parser failed, what next) |
+        guides (guide index) | funding-types | definitions | pitch-deck.
+        Unknown or empty topic returns the available topic list — never throws.
+        Returns: markdown."""
         return core.gamefunds_help(topic)
 
     return server

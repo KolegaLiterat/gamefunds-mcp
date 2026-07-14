@@ -116,7 +116,7 @@ def test_unknown_genre_signals_none_and_low_confidence(tmp_path, monkeypatch):
 
     assert out["genre_signal"] == "none"
     assert out.get("genre_warning")
-    assert "nie zawiera" in out["genre_warning"].lower()
+    assert "no entries matching" in out["genre_warning"].lower()
 
     all_candidates = []
     for ft in FUNDING_TYPES:

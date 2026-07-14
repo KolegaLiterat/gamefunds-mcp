@@ -181,7 +181,7 @@ def test_match_project_budget_signal_above_range(tmp_path, monkeypatch):
 
     assert out["budget_signal"] == "above_range"
     assert out.get("budget_warning")
-    assert "wykracza poza skalę" in out["budget_warning"].lower()
+    assert "outside this catalog's scale" in out["budget_warning"].lower()
     assert all(c["confidence"] == "low" for c in _all_candidates(out))
 
 

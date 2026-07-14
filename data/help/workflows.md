@@ -1,16 +1,15 @@
 ## Workflows
 
-### od_projektu_do_shortlisty
-- Zawołaj `match_project(...)`.
-- Dociągnij 2–3 finalistów przez `get_entity(slug)`.
-- Dla każdego finalistycznego targetu zawołaj `get_submission_brief(slug)` zanim zaczniesz pisać pitch.
+### project_to_shortlist
+- Call `match_project(...)`.
+- Pull 2–3 finalists with `get_entity(slug)`.
+- For each finalist, call `get_submission_brief(slug)` before writing any pitch or email.
 
-### pitch_pod_konkretny_target
-- `get_submission_brief(slug)` → sprawdź kanał i hard_filters.
-- `get_pitch_rubric(target_slug=slug, funding_type=...)` → zbuduj deck.
-- `review_pitch(deck_markdown, target_slug=slug, ...)` → napraw twarde braki.
+### pitch_for_specific_target
+- `get_submission_brief(slug)` → check channel and hard_filters.
+- `get_pitch_rubric(target_slug=slug, funding_type=...)` → build the deck.
+- `review_pitch(deck_markdown, target_slug=slug, ...)` → fix hard gaps.
 
-### cotygodniowy_przeglad_pipeline
-- `list_pipeline(stale_days=30)` → follow-upy i zaległe rozmowy.
-- `set_status(...)` / `add_note(...)` po każdej akcji.
-
+### weekly_pipeline_review
+- `list_pipeline(stale_days=30)` → follow-ups and stale conversations.
+- `set_status(...)` / `add_note(...)` after every real action.

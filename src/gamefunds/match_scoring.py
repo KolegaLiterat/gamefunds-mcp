@@ -198,9 +198,9 @@ def compute_catalog_budget_scale(rows: list[Any]) -> CatalogBudgetScale:
 
 def format_budget_warning(budget_usd: int, signal: str, scale: CatalogBudgetScale) -> str:
     return (
-        f"Budżet ${budget_usd:,} wykracza poza skalę tego katalogu. "
-        f"Największe wpisy operują w okolicach ${scale.reference_high_usd:,}. "
-        f"Wyniki uszeregowane bez wiarygodnego dopasowania budżetu."
+        f"Budget ${budget_usd:,} is outside this catalog's scale. "
+        f"Largest entries operate around ${scale.reference_high_usd:,}. "
+        f"Results are ranked without reliable budget matching."
     )
 
 
@@ -379,10 +379,10 @@ def _term_in_corpus(term: str, corpus: str) -> bool:
 
 
 def format_genre_warning(unmatched: list[str]) -> str:
-    terms = ", ".join(unmatched) if unmatched else "podane cechy"
+    terms = ", ".join(unmatched) if unmatched else "the given traits"
     return (
-        f"Katalog nie zawiera wpisów pasujących do: {terms}. "
-        f"Wyniki uszeregowane bez uwzględnienia tych cech — zweryfikuj ręcznie."
+        f"The catalog has no entries matching: {terms}. "
+        f"Results are ranked without those traits — verify manually."
     )
 
 
