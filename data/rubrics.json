@@ -1,0 +1,189 @@
+{
+  "synced_at": "2026-07-14T05:21:35.981383+00:00",
+  "source_file": "PitchDeckTutorial.md",
+  "source_sha": "1629173c3aa0b918b922d1413ce30e2b81949c15",
+  "slide_range": [
+    10,
+    20
+  ],
+  "appendix": "Appendix (optional, after contact): monetization details, full comp analysis, risk register, roadmap post-launch, team CVs.",
+  "slides": [
+    {
+      "n": 1,
+      "title": "Title / Hook",
+      "one_job": "Game name, key art, one-line elevator pitch, genre + platforms + release window",
+      "notes": "The elevator pitch formula that works: *\"[Genre] where [the twist], for fans of [comp A] and [comp B].\"* — \"A cozy roguelite where you cook for the dungeon's monsters instead of fighting them, for fans of Dungeon Munchies and Moonlighter.\" If the reader stops after this slide, they should still know exactly what you're making.",
+      "must_contain": [
+        "elevator pitch",
+        "fans of"
+      ]
+    },
+    {
+      "n": 2,
+      "title": "The Game",
+      "one_job": "What the player *does*, in one screen — ideally over a gameplay GIF/screenshot",
+      "notes": null,
+      "must_contain": []
+    },
+    {
+      "n": 3,
+      "title": "Why It Will Sell (USP)",
+      "one_job": "2–4 things that make it different *and* desirable",
+      "notes": "\"Beautiful pixel art\" and \"engaging story\" are not USPs — every deck says that. A USP is something a scout can repeat to their greenlight committee: a mechanic nobody has, a licence, an underserved audience you demonstrably reach, a creator with a following.",
+      "must_contain": [
+        "beautiful pixel art",
+        "engaging story"
+      ]
+    },
+    {
+      "n": 4,
+      "title": "Gameplay",
+      "one_job": "Core loop, a session's flow, what keeps players coming back",
+      "notes": null,
+      "must_contain": []
+    },
+    {
+      "n": 5,
+      "title": "Look & Feel",
+      "one_job": "Art direction, tone, audio — show, don't describe",
+      "notes": null,
+      "must_contain": []
+    },
+    {
+      "n": 6,
+      "title": "Market & Comparables",
+      "one_job": "Genre health, 3–5 comps with real numbers, your positioning",
+      "notes": "The most-scrutinized slide. Rules:\n- Pick comps by *audience overlap*, not looks. 3–5 titles, at least one recent (<3 years).\n- Use real numbers (Gamalytic estimates are fine — the directory links them per publisher) and *median-case* comps. Claiming Stardew Valley numbers kills your credibility instantly.\n- Show a floor/expected/ceiling range. Funders respect devs who know their realistic case.\n- Don't guess the range — derive it from data. Full process in [Market-Driven Analysis & Budgeting](#market-driven-analysis--budgeting) below.",
+      "must_contain": [
+        "pick comps by *audience overlap*, not looks. 3–5 titles, at least one recent (<3 years)",
+        "use real numbers (gamalytic estimates are fine",
+        "show a floor/expected/ceiling range. funders respect devs who know their realistic case",
+        "don't guess the range",
+        "comps",
+        "median",
+        "budget"
+      ]
+    },
+    {
+      "n": 7,
+      "title": "Traction",
+      "one_job": "Wishlists, demo stats, festival selections, press, community — anything measurable",
+      "notes": "The slide that most often gets the meeting. Even small numbers beat no numbers: 8,000 wishlists in 2 months, 25% demo→wishlist conversion, a 40k-view TikTok. If pitching pre-announcement, use playtest feedback and community size.",
+      "must_contain": [
+        "wishlist"
+      ]
+    },
+    {
+      "n": 8,
+      "title": "Team",
+      "one_job": "Who you are, shipped titles, why *this team* for *this game*",
+      "notes": "Shipped titles with roles and numbers (\"lead programmer on X, 500k copies\"). No shipped titles? Show finished *things*: jam wins, mods with downloads, previous careers. Address the obvious risk (\"first game, but our producer shipped 4 titles at Y\") before they raise it.",
+      "must_contain": [
+        "lead programmer on x, 500k copies",
+        "first game, but our producer shipped 4 titles at y",
+        "shipped"
+      ]
+    },
+    {
+      "n": 9,
+      "title": "Production Plan",
+      "one_job": "Current stage, milestones to release, scope control",
+      "notes": null,
+      "must_contain": []
+    },
+    {
+      "n": 10,
+      "title": "Budget & The Ask",
+      "one_job": "Total budget, what you're asking for, what it buys, what you offer in return",
+      "notes": "Never leave this out and never say \"flexible.\" State: total budget, how much you're asking for (and what covers the rest — savings, grant, other partner), rough breakdown (salaries/marketing/ports/contingency), and burn rate + team size so they can sanity-check it. Include your own salary — funders distrust budgets where founders eat air.",
+      "must_contain": [
+        "flexible",
+        "budget",
+        "burn rate"
+      ]
+    },
+    {
+      "n": 11,
+      "title": "Contact",
+      "one_job": "Email, links, build access",
+      "notes": null,
+      "must_contain": []
+    }
+  ],
+  "tailoring": {
+    "publisher": {
+      "emphasize": [
+        "Portfolio fit — open with why *them*: \"your audience for X overlaps ours\" beats any generic intro. Check their Steam publisher page (linked in the directory) before writing a word.",
+        "The build. Most publishers won't seriously engage without something playable. Vertical slice > deck.",
+        "Comps & market slide — this is what their greenlight committee argues about. Make it defensible.",
+        "Scope realism — publishers fear devs who can't ship. Milestones, a cut-list (\"what we drop if behind\"), and a track record of finishing things.",
+        "What you need beyond money — ports? localization? marketing? Publishers like asks that map to their machine.",
+        "Read their pitch guide when they have one (tinyBuild, 11 bit, Team17 do — links in the directory) and answer *their* template's questions."
+      ],
+      "deemphasize": [
+        "company vision",
+        "exit strategy",
+        "market TAM"
+      ]
+    },
+    "project_investor": {
+      "emphasize": [
+        "The financial model. Expand the budget slide into a mini-P&L: budget → floor/expected/ceiling revenue scenarios → their returns under the proposed waterfall in each. Show the deal is attractive in the *expected* case, not just the dream case.",
+        "Your self-publishing plan. Since they don't bring a marketing machine, prove you have one: marketing budget line, wishlist strategy, who handles ports and QA. If a marketing-only publisher is part of the plan, name them.",
+        "Track record & de-risking — what's already built, what's validated (demo metrics, playtests), what remains. The main risk they underwrite is an unfinished game; show that the path from here to launch is short and predictable.",
+        "Deal structure proposal — recoup order, premium, split, and IP staying with you. Coming with a coherent proposed structure signals professionalism (they'll negotiate it anyway)."
+      ],
+      "deemphasize": [
+        "long-term studio vision",
+        "sequels (unless offered as upside)",
+        "art philosophy"
+      ]
+    },
+    "vc_equity": {
+      "emphasize": [
+        "Team first. For early-stage equity, team is 60% of the decision. Backgrounds, shipped titles, why this group is unfairly suited to this plan.",
+        "Vision & scale — what the *company* becomes in 5–10 years: a multi-title studio? an IP factory? a platform/tech play? A plan built around a single title rarely meets VC investment criteria — in that case, equity is not the right financing model (see [Funding Types](FundingTypes.md#3-equity-investment)).",
+        "Market size — genre/segment TAM and why it's growing. VCs think in markets, not comps.",
+        "The machine, not the game — pipeline, cadence of releases, how each title compounds (shared tech, audience, IP). Show game #1 as proof-of-capability for the machine.",
+        "Financials & the round — raise amount, valuation expectation (or \"market\"), runway it buys, milestones it reaches, and what the *next* round looks like. Know your cap table cold.",
+        "Exit awareness — you don't need an exit slide at seed, but be ready for the question. \"Who acquires studios like ours and why\" is the shape of the answer."
+      ],
+      "deemphasize": [
+        "deep mechanics discussion",
+        "level design",
+        "art pipelines"
+      ]
+    },
+    "grant": {
+      "emphasize": [
+        "Read the criteria, then mirror them. Every program scores against published criteria (cultural value, innovation, regional employment, export potential…). Structure your application so an evaluator can tick their boxes without hunting.",
+        "Cultural/innovation angle — the things you'd cut from a publisher deck (narrative themes, artistic ambition, educational value, local language/culture) are often exactly what scores points here.",
+        "Budget precision — grant budgets are audited, not negotiated. Follow their template, respect eligible-cost rules, and be exact.",
+        "Feasibility & timeline — public funders hate failed projects more than boring ones. Conservative scope, clear milestones, evidence you can deliver.",
+        "Match funding — many grants cover only a percentage; show where the rest comes from."
+      ],
+      "deemphasize": [
+        "revenue projections and ROI (usually irrelevant or even counterproductive)",
+        "hype language"
+      ]
+    }
+  },
+  "common_mistakes": [
+    "Burying the game. Slides 1–2 must show what the player does. Lore, studio history and market theory come later or never.",
+    "No ask. Decks that never say how much money they want, for what, and what's offered in return.",
+    "Fantasy comps — comparing to genre-defining megahits as your expected case.",
+    "Wrong deck for the audience — sending the game-first publisher deck to a VC, or an ROI model to a grant committee (this whole guide exists because of this mistake).",
+    "Overscoped for the track record — first-time team pitching a 4-year open-world RPG. Funders pattern-match this to \"will never ship.\"",
+    "Ignoring submission guidelines where they exist — it's the first test of whether you can follow a milestone contract.",
+    "Pitching too early — with nothing playable and no traction, you're asking funders to imagine everything. Usually the answer to \"too early\" is a grant or prototype fund, not a publisher.",
+    "Taking the first offer because it's the only one. Parallel conversations are leverage; a single offer is a price-taker's position. This is also why you pitch in waves and before you're broke."
+  ],
+  "design_rules": [
+    "One idea per slide. If a slide needs a paragraph, it's two slides or a cut.",
+    "Show the game on every possible slide. Screenshots and GIFs as backgrounds beat white slides with bullet points.",
+    "Readable on a phone. Scouts read decks on trains. Big text, high contrast.",
+    "PDF, always. No fonts breaking, no PowerPoint versions, plays everywhere. Embed a *linked* video (thumbnail + URL), never a 200 MB file.",
+    "The video: 60–90 seconds, raw gameplay within 5 seconds, no studio logos intro, no cinematic-only trailers at pitch stage.",
+    "Update the date. A deck saying \"Q1 2025\" sent in July 2026 says you've been shopping it unsuccessfully for 18 months."
+  ]
+}
