@@ -63,5 +63,7 @@ def test_parser_is_loud_on_unknown_schema():
 |---|---|
 | x | y |
 """
-    with pytest.raises(ParseError):
+    with pytest.raises(ParseError) as exc:
         parse_directory_markdown(bad)
+    assert exc.value.section == "A"
+    assert "Unknown table schema" in str(exc.value)

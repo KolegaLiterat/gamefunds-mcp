@@ -2,9 +2,52 @@ from __future__ import annotations
 
 from pathlib import Path
 
+GUIDE_SPECS: list[dict[str, str]] = [
+    {
+        "uri": "gamefunds://guide/definitions",
+        "upstream": "Definitions.md",
+        "local": "Definitions.md",
+    },
+    {
+        "uri": "gamefunds://guide/definitions/pl",
+        "upstream": "DefinitionsPL.md",
+        "local": "DefinitionsPL.md",
+    },
+    {
+        "uri": "gamefunds://guide/funding-types",
+        "upstream": "FundingTypes.md",
+        "local": "FundingTypes.md",
+    },
+    {
+        "uri": "gamefunds://guide/funding-types/pl",
+        "upstream": "FundingTypesPL.md",
+        "local": "FundingTypesPL.md",
+    },
+    {
+        "uri": "gamefunds://guide/pitch-deck",
+        "upstream": "PitchDeckTutorial.md",
+        "local": "PitchDeckTutorial.md",
+    },
+    {
+        "uri": "gamefunds://guide/pitch-deck/pl",
+        "upstream": "PitchDeckTutorialPL.md",
+        "local": "PitchDeckTutorialPL.md",
+    },
+]
+
+UPSTREAM_GUIDE_FILES = [spec["upstream"] for spec in GUIDE_SPECS]
+
 
 def _root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def guides_dir() -> Path:
+    return _root() / "data" / "guides"
+
+
+def guide_sha_meta_key(upstream_name: str) -> str:
+    return f"guide_sha_{upstream_name}"
 
 
 def _read(path: Path) -> str:
@@ -15,24 +58,20 @@ def register_guides(server) -> None:
     """
     Register `gamefunds://guide/...` resources.
 
-    These are loaded from `data/guides/` if present (synced later), otherwise a small placeholder.
+    Content is loaded from `data/guides/` after sync; until then a short placeholder is returned.
     """
 
-    guides_dir = _root() / "data" / "guides"
+    root = guides_dir()
 
-    def _maybe(file: str, fallback: str) -> str:
-        p = guides_dir / file
-        return _read(p) if p.exists() else fallback
+    for spec in GUIDE_SPECS:
+        local_path = root / spec["local"]
+        uri = spec["uri"]
+        fallback = f"{spec['upstream']} guide not synced yet."
 
-    @server.resource("gamefunds://guide/definitions")
-    def definitions() -> str:
-        return _maybe("definitions.md", "Definitions guide not synced yet.")
+        def _make_handler(path: Path, placeholder: str):
+            def _handler() -> str:
+                return _read(path) if path.exists() else placeholder
 
-    @server.resource("gamefunds://guide/funding-types")
-    def funding_types() -> str:
-        return _maybe("funding-types.md", "Funding types guide not synced yet.")
+            return _handler
 
-    @server.resource("gamefunds://guide/pitch-deck")
-    def pitch_deck() -> str:
-        return _maybe("pitch-deck.md", "Pitch deck guide not synced yet.")
-
+        server.resource(uri)(_make_handler(local_path, fallback))
