@@ -6,8 +6,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from fastmcp.exceptions import AuthorizationError
+from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.tool import ToolResult
+
+from .paths import tool_calls_log_path
+
+_WRITE_TOOLS = frozenset({"set_status", "add_note", "sync_directory"})
 
 _MAX_LOG_BYTES = 5 * 1024 * 1024
 _REDACT_STRING_LEN = 100
@@ -21,8 +27,19 @@ def _approx_tokens(obj: Any) -> int:
     return max(1, len(s) // 4)
 
 
+def _known_auth_tokens() -> frozenset[str]:
+    tokens: set[str] = set()
+    for name in ("GAMEFUNDS_TOKEN", "GAMEFUNDS_TOKEN_READONLY"):
+        raw = os.getenv(name, "").strip()
+        if raw:
+            tokens.add(raw)
+    return frozenset(tokens)
+
+
 def _redact_for_log(value: Any) -> Any:
     if isinstance(value, str):
+        if value in _known_auth_tokens():
+            return f"<str:{len(value)} chars>"
         if len(value) <= _REDACT_STRING_LEN:
             return value
         return f"<str:{len(value)} chars>"
@@ -118,11 +135,35 @@ class TokenGuardMiddleware(Middleware):
         return result
 
 
+class ScopeMiddleware(Middleware):
+    """Enforce read/write scopes for HTTP-authenticated requests."""
+
+    def __init__(self, *, enforce: bool = False) -> None:
+        self.enforce = enforce
+
+    async def on_call_tool(self, context, call_next):
+        if not self.enforce:
+            return await call_next(context)
+
+        msg = getattr(context, "message", None)
+        tool_name = getattr(msg, "name", None)
+        if tool_name not in _WRITE_TOOLS:
+            return await call_next(context)
+
+        access = get_access_token()
+        scopes = set(access.scopes if access else [])
+        if "write" not in scopes:
+            raise AuthorizationError(
+                f"Tool '{tool_name}' requires 'write' scope. This token is read-only."
+            )
+        return await call_next(context)
+
+
 class LoggingMiddleware(Middleware):
     """Log tool calls to a local JSONL file for debugging."""
 
-    def __init__(self, *, log_path: str = "data/tool_calls.log"):
-        self.log_path = log_path
+    def __init__(self, *, log_path: str | Path | None = None):
+        self.log_path = str(log_path if log_path is not None else tool_calls_log_path())
         self.log_args = os.getenv("GAMEFUNDS_LOG_ARGS", "0").strip().lower() in {"1", "true", "yes"}
 
     async def on_call_tool(self, context, call_next):

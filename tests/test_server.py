@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import os
 import pytest
 
 from fastmcp import Client
@@ -57,4 +58,33 @@ async def test_resources_read(tmp_path, monkeypatch):
         pl = await client.read_resource("gamefunds://guide/definitions/pl")
         assert en[0].text == "# synced definitions"
         assert pl[0].text == "# synced definitions PL"
+
+
+@pytest.mark.anyio
+async def test_tools_work_when_cwd_is_not_writable(tmp_path, monkeypatch):
+    """Regression: MCP clients (claude mcp add) do not set cwd — paths must be absolute."""
+    data_dir = tmp_path / "pkg-data"
+    data_dir.mkdir()
+    db = data_dir / "gamefunds.db"
+    monkeypatch.setenv("GAMEFUNDS_DATA_DIR", str(data_dir))
+
+    md = (Path(__file__).parent / "fixtures" / "directory_small_modified.md").read_text(encoding="utf-8")
+    upsert_entities(parse_directory_markdown(md), db_path=db)
+
+    readonly_cwd = tmp_path / "readonly"
+    readonly_cwd.mkdir()
+    readonly_cwd.chmod(0o555)
+
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(readonly_cwd)
+        server = build_server()
+        async with Client(server) as client:
+            out = (await client.call_tool("search_funding", {"query": "Alpha", "limit": 15})).data
+            assert out["total_matched"] >= 1
+    finally:
+        os.chdir(old_cwd)
+        readonly_cwd.chmod(0o755)
+
+    assert (data_dir / "tool_calls.log").exists()
 

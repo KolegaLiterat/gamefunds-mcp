@@ -9,23 +9,30 @@ This module must remain a thin transport layer delegating to `gamefunds.core`.
 from fastmcp import FastMCP
 
 import os
-from pathlib import Path
+from typing import Literal
 
 from . import core
-from .db import DEFAULT_DB_PATH, ensure_db
+from .auth import build_http_auth_verifier, require_http_token
+from .db import ensure_db
+from .paths import default_db_path
 from .guides import register_guides
-from .middleware import LoggingMiddleware, TokenGuardMiddleware
+from .http_serve import run_http_server
+from .middleware import LoggingMiddleware, ScopeMiddleware, TokenGuardMiddleware
 from .sync import check_updates as _check_updates, sync_directory as _sync_directory
 
+Transport = Literal["stdio", "http"]
 
-def build_server() -> FastMCP:
-    ensure_db(Path(os.getenv("GAMEFUNDS_DB_PATH", str(DEFAULT_DB_PATH))))
 
-    server = FastMCP("GameFunds")
+def build_server(*, transport: Transport = "stdio") -> FastMCP:
+    ensure_db(default_db_path())
+
+    auth = build_http_auth_verifier() if transport == "http" else None
+    server = FastMCP("GameFunds", auth=auth)
 
     max_tokens = int(os.getenv("GAMEFUNDS_MAX_TOOL_TOKENS", "2000"))
+    server.add_middleware(ScopeMiddleware(enforce=transport == "http"))
     server.add_middleware(TokenGuardMiddleware(max_tokens=max_tokens))
-    server.add_middleware(LoggingMiddleware(log_path="data/tool_calls.log"))
+    server.add_middleware(LoggingMiddleware())
 
     register_guides(server)
 
@@ -213,10 +220,21 @@ def build_server() -> FastMCP:
     return server
 
 
-def main() -> None:
-    """Run the MCP server over stdio."""
-    server = build_server()
+def run_stdio_server() -> None:
+    """Run the MCP server over stdio (no auth)."""
+    server = build_server(transport="stdio")
     server.run()
+
+
+def run_http_server_cli(*, host: str, port: int) -> None:
+    """Run the MCP server over HTTP with token auth."""
+    require_http_token()
+    server = build_server(transport="http")
+    run_http_server(server, host=host, port=port)
+
+
+def main() -> None:
+    run_stdio_server()
 
 
 if __name__ == "__main__":

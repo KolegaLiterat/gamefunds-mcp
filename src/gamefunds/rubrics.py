@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .db import DEFAULT_DB_PATH, connect, ensure_db
+from .paths import rubrics_path
 from .rubric_parser import RubricParseError, parse_pitch_tutorial
 
 logger = logging.getLogger(__name__)
 
-RUBRICS_PATH = Path(__file__).resolve().parents[2] / "data" / "rubrics.json"
+RUBRICS_PATH = rubrics_path()
 
 
 @dataclass

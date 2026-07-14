@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import sqlite3
 from datetime import date, datetime, timezone
@@ -9,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import DEFAULT_DB_PATH, connect, ensure_db
+from .paths import data_dir, default_db_path
 from .match_scoring import (
     assess_budget_scale,
     assess_genre_coverage,
@@ -32,7 +32,7 @@ from .rubrics import load_rubrics
 
 
 def _db_path() -> Path:
-    return Path(os.getenv("GAMEFUNDS_DB_PATH", str(DEFAULT_DB_PATH)))
+    return default_db_path()
 
 
 def _entity_brief(row: sqlite3.Row) -> dict[str, Any]:
@@ -1090,13 +1090,11 @@ def gamefunds_help(topic: str) -> str:
         "pitch-deck": "PitchDeckTutorial.md",
     }
 
-    root = Path(__file__).resolve().parents[2]
-
     if topic_norm == "guides":
         return _guides_index()
 
     if topic_norm in help_topics:
-        return (root / "data" / "help" / help_topics[topic_norm]).read_text(encoding="utf-8")
+        return (data_dir() / "help" / help_topics[topic_norm]).read_text(encoding="utf-8")
 
     if topic_norm in guide_topics:
         path = guides_dir() / guide_topics[topic_norm]

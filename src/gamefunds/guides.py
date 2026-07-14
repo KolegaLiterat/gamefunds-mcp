@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .paths import guides_dir as _guides_dir
+
 GUIDE_SPECS: list[dict[str, str]] = [
     {
         "uri": "gamefunds://guide/definitions",
@@ -38,12 +40,8 @@ GUIDE_SPECS: list[dict[str, str]] = [
 UPSTREAM_GUIDE_FILES = [spec["upstream"] for spec in GUIDE_SPECS]
 
 
-def _root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
 def guides_dir() -> Path:
-    return _root() / "data" / "guides"
+    return _guides_dir()
 
 
 def guide_sha_meta_key(upstream_name: str) -> str:

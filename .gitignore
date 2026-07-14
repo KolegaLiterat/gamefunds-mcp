@@ -15,4 +15,6 @@ data/guides/
 
 # local logs
 *.log
+.env
+DEPLOY.local.md
 

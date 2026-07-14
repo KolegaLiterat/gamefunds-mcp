@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from .parser import parse_directory_markdown
+from .paths import default_db_path
 
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "gamefunds.db"
+DEFAULT_DB_PATH = default_db_path()
 
 ENTITY_COLUMNS = [
     "slug",
