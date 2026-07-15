@@ -70,6 +70,8 @@ Directory data comes from [github.com/GameDevGrzesiek/GameFunds](https://github.
 
 `data/rubrics.json` is derived from Grzegorz's `PitchDeckTutorial.md` in that repository.
 
+Grzegorz is a working game dev — his game is [**Foxy Dumplings**](https://store.steampowered.com/app/4184130/Foxy_Dumplings/) on Steam. If this tool is useful to you, wishlisting it is a good way to say thanks.
+
 The database (`data/gamefunds.db`) and synced guides (`data/guides/`) are **not** in git — run `gamefunds sync --apply` on first use.
 
 Your pipeline (publisher contacts, notes) lives only in your local DB and must never be committed.
