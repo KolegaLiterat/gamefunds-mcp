@@ -16,6 +16,54 @@ MCP server for browsing a **local copy** of the [GameFunds](https://github.com/G
 - Match genres in languages other than English — queries like "przygodowa" won't map to catalog terms
 - Replace legal or financial advice — it surfaces directory notes, not deal terms
 
+## Tools
+
+Thirteen tools, grouped by what they touch. Catalog tools are public (read scope);
+pipeline tools are private to the server owner (write scope).
+
+| Tool | Scope | What it does |
+|------|-------|--------------|
+| `match_project` | read | Rank funding sources for a project (genre, budget, stage, country). Returns candidates grouped by funding type — see [Scoring](#scoring). |
+| `search_funding` | read | Full-text search over the catalog. Hyphens/slashes/`&` are safe (`turn-based`, `hack & slash`). |
+| `filter_funding` | read | Structured filter: section, country, budget tier, comm rating, has-email. |
+| `get_entity` | read | Full record for one source: links, contact, submission path, notes, amounts. |
+| `get_submission_brief` | read | How to pitch a specific source: channel, submission links, stated criteria, hard filters, portfolio. |
+| `get_pitch_rubric` | read | Deck rubric tailored to the target's funding type (publisher / VC / project investor / grant), derived from the upstream pitch tutorial. |
+| `review_pitch` | read | Deterministic deck check: missing slides, missing numbers, hard-filter violations. It stays quiet on a solid deck — it does not pad. |
+| `gamefunds_help` | read | Guidance topics + a bridge to the concept guides (`gamefunds://guide/*`). |
+| `check_updates` | read | Cheap SHA check for upstream directory changes. |
+| `set_status` | write | Set a pipeline status (`contacted`, `in_talks`, `signed`, …) for a source. |
+| `add_note` | write | Append a dated note to a pipeline entry. |
+| `list_pipeline` | write | Your outreach state; `stale_days=N` surfaces overdue follow-ups. |
+| `sync_directory` | write | Re-sync the directory + guides from upstream. |
+
+## Scoring
+
+`match_project` uses a **deterministic heuristic — no LLM**. Results are grouped by
+funding type (`publisher`, `vc_equity`, `project_investor`, `grant`), and **scores are
+comparable only within a group**: a grant scoring 15 is not "worse" than a publisher
+scoring 66, they are different funding paths.
+
+Each candidate carries a `breakdown` (budget / country / stage / genre / comm), a
+`confidence` (`high` / `medium` / `low`), and human-readable `reasons`. Two design
+choices are worth knowing:
+
+- **Genre outweighs country for publishers.** A cozy-game publisher in the US beats a
+  generic publisher in your own country — country is a tie-breaker (weight 5), not the
+  driver. For grants, country is near-decisive (weight 28), because grants are regional.
+- **Missing data is not zero.** `breakdown.budget: null` and `confidence: low` mean the
+  catalog lacks the data, not that it scored poorly. `genre_signal: none` means no
+  catalog entry matches your genre at all — the ranking is then budget-and-stage only,
+  flagged with `genre_warning`, and you should verify by hand.
+
+**Hard filters** remove sources that cannot work (counted in `hard_filtered`): budget
+off by 2+ tiers, a grant outside your country, or a genre-exclusivity clash (a
+sandbox game against a publisher that says *"strictly no sandbox"*, a cozy sim against
+*"horror only"*). These are dropped, not down-ranked.
+
+The full weight table lives in `data/help/scoring.md` and is available at runtime via
+`gamefunds_help("scoring")`.
+
 ## Data attribution
 
 Directory data comes from [github.com/GameDevGrzesiek/GameFunds](https://github.com/GameDevGrzesiek/GameFunds) © Grzegorz Wątroba, MIT license.
