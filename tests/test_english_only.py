@@ -71,6 +71,8 @@ def test_server_instructions_set_and_mention_english():
     server = build_server()
     assert server.instructions
     assert "English" in server.instructions
+    assert "Shared endpoints" in server.instructions
+    assert "https://github.com/KolegaLiterat/gamefunds-mcp" in server.instructions
     assert server.instructions == SERVER_INSTRUCTIONS
 
 

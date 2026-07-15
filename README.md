@@ -169,11 +169,11 @@ export GAMEFUNDS_TOKEN=...
 gamefunds serve --transport http --port 8080
 ```
 
-Generate `.env` from `.env.example`. Optional read-only token: `GAMEFUNDS_TOKEN_READONLY`.
+Generate `.env` from `.env.example`. Optional **shared read-only** token: `GAMEFUNDS_TOKEN_READONLY` — catalog access only; pipeline data is hidden and pipeline tools are refused with setup instructions.
 
 ### Rate limiting
 
-Default: **60 requests/minute per token** (`GAMEFUNDS_RATE_LIMIT`). One LLM conversation uses ~10–50 tool calls, so 60/min is generous for real use but stops scrapers. The limit key is a SHA-256 hash of the bearer token — the raw token never appears in logs or rate-limit storage.
+Owner token: **60 requests/minute** (`GAMEFUNDS_RATE_LIMIT`). Shared read-only token: **300/minute** (`GAMEFUNDS_RATE_LIMIT_READONLY`) — higher because many forum users share one token. One LLM conversation uses ~10–50 tool calls. Limits are keyed by SHA-256 hash of the bearer token — the raw token never appears in logs or rate-limit storage.
 
 ### Docker
 
@@ -191,10 +191,10 @@ docker compose up -d --build
 
 | Scope | Tools |
 |-------|-------|
-| `read` | search, filter, get_entity, match_project, briefs, rubrics, review_pitch (read-only path), help, check_updates |
-| `write` | set_status, add_note, sync_directory |
+| `read` | search, filter, get_entity (catalog only — no pipeline block), match_project, briefs, rubrics, review_pitch, help, check_updates |
+| `write` | set_status, add_note, list_pipeline, sync_directory; get_entity includes pipeline |
 
-Read-only tokens calling `set_status` get a clear error, not a 500.
+Read-only tokens calling pipeline tools get a clear message pointing to the open-source repo — not a 500, and no private data.
 
 ## Development
 

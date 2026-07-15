@@ -13,7 +13,18 @@ from fastmcp.tools.tool import ToolResult
 
 from .paths import tool_calls_log_path
 
-_WRITE_TOOLS = frozenset({"set_status", "add_note", "sync_directory"})
+_PIPELINE_TOOLS = frozenset({"set_status", "add_note", "list_pipeline"})
+_ADMIN_TOOLS = frozenset({"sync_directory"})
+_WRITE_REQUIRED_TOOLS = _PIPELINE_TOOLS | _ADMIN_TOOLS
+
+SHARED_READONLY_DENIAL = (
+    "This is a shared read-only endpoint — the funding catalog is public, but "
+    "pipeline tracking (set_status, add_note, list_pipeline) is private to the "
+    "server owner.\n\n"
+    "To track your own outreach, run GameFunds MCP yourself — it is free, open "
+    "source, and needs no token when run locally:\n"
+    "https://github.com/KolegaLiterat/gamefunds-mcp"
+)
 
 _MAX_LOG_BYTES = 5 * 1024 * 1024
 _REDACT_STRING_LEN = 100
@@ -91,6 +102,25 @@ def _truncate_results_payload(payload: dict[str, Any], max_tokens: int) -> dict[
     return trimmed
 
 
+def _has_write_scope() -> bool:
+    access = get_access_token()
+    if access is None:
+        return True
+    return "write" in set(access.scopes)
+
+
+def _strip_pipeline_from_result(result: Any) -> Any:
+    if isinstance(result, ToolResult) and isinstance(result.structured_content, dict):
+        payload = dict(result.structured_content)
+        payload.pop("pipeline", None)
+        return ToolResult(structured_content=payload)
+    if isinstance(result, dict):
+        payload = dict(result)
+        payload.pop("pipeline", None)
+        return payload
+    return result
+
+
 class TokenGuardMiddleware(Middleware):
     """
     Token budget guard middleware.
@@ -148,16 +178,15 @@ class ScopeMiddleware(Middleware):
 
         msg = getattr(context, "message", None)
         tool_name = getattr(msg, "name", None)
-        if tool_name not in _WRITE_TOOLS:
-            return await call_next(context)
 
-        access = get_access_token()
-        scopes = set(access.scopes if access else [])
-        if "write" not in scopes:
-            raise AuthorizationError(
-                f"Tool '{tool_name}' requires 'write' scope. This token is read-only."
-            )
-        return await call_next(context)
+        if tool_name in _WRITE_REQUIRED_TOOLS and not _has_write_scope():
+            raise AuthorizationError(SHARED_READONLY_DENIAL)
+
+        result = await call_next(context)
+
+        if tool_name == "get_entity" and not _has_write_scope():
+            return _strip_pipeline_from_result(result)
+        return result
 
 
 class LoggingMiddleware(Middleware):

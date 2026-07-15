@@ -35,4 +35,10 @@ routinely reverse it.
 ## Token discipline
 List tools return compact briefs. Call get_entity only for 2–3 finalists. If total_matched > 30, \
 narrow filters instead of paging through results.
+
+## Shared endpoints
+If a pipeline tool (set_status, add_note, list_pipeline) is refused for lack of scope, you are on a \
+shared read-only endpoint. Do not retry. Tell the user the catalog is public but pipeline tracking \
+requires running their own instance (free, open source, no token needed locally): \
+https://github.com/KolegaLiterat/gamefunds-mcp
 """
