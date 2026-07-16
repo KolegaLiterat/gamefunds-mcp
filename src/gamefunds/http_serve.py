@@ -70,22 +70,25 @@ class GameFundsRateLimitMiddleware(BaseHTTPMiddleware):
     """Apply per-token rate limits (owner vs shared read-only token)."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        limiters: tuple[Limiter, ...] = (
-            request.app.state.limiter_full,
-            request.app.state.limiter_readonly,
-        )
-        for limiter in limiters:
-            try:
-                limiter._check_request_limit(request, endpoint_func=None, in_middleware=True)
-            except RateLimitExceeded as exc:
-                request.app.state.limiter = limiter
-                handler = request.app.exception_handlers.get(
-                    RateLimitExceeded,
-                    _rate_limit_exceeded_handler,
-                )
-                if inspect.iscoroutinefunction(handler):
-                    return await handler(request, exc)
-                return handler(request, exc)
+        token = _extract_bearer_token(request)
+        if _is_readonly_token(token):
+            limiter = request.app.state.limiter_readonly
+        elif token:
+            limiter = request.app.state.limiter_full
+        else:
+            return await call_next(request)
+
+        try:
+            limiter._check_request_limit(request, endpoint_func=None, in_middleware=True)
+        except RateLimitExceeded as exc:
+            request.app.state.limiter = limiter
+            handler = request.app.exception_handlers.get(
+                RateLimitExceeded,
+                _rate_limit_exceeded_handler,
+            )
+            if inspect.iscoroutinefunction(handler):
+                return await handler(request, exc)
+            return handler(request, exc)
         return await call_next(request)
 
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import secrets
 from pathlib import Path
 
@@ -216,6 +217,99 @@ async def test_rate_limit_returns_429_on_burst(catalog_db, http_tokens, monkeypa
             assert last_status == 429
             assert response.headers.get("retry-after") is not None
             assert token not in response.text
+
+
+@pytest.mark.anyio
+async def test_readonly_rate_limit_returns_429_on_burst(catalog_db, http_tokens, monkeypatch):
+    monkeypatch.setenv("GAMEFUNDS_RATE_LIMIT_READONLY", "5/minute")
+    app = build_http_asgi_app(build_server(transport="http"))
+    token = http_tokens["readonly"]
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            last_status = None
+            for _ in range(6):
+                response = await client.post("/mcp", headers=headers)
+                last_status = response.status_code
+            assert last_status == 429
+            assert response.headers.get("retry-after") is not None
+
+
+@pytest.mark.anyio
+async def test_full_and_readonly_limits_are_independent(catalog_db, http_tokens, monkeypatch):
+    monkeypatch.setenv("GAMEFUNDS_RATE_LIMIT", "3/minute")
+    monkeypatch.setenv("GAMEFUNDS_RATE_LIMIT_READONLY", "3/minute")
+    app = build_http_asgi_app(build_server(transport="http"))
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            readonly_headers = {"Authorization": f"Bearer {http_tokens['readonly']}"}
+            for _ in range(3):
+                response = await client.post("/mcp", headers=readonly_headers)
+                assert response.status_code != 429
+
+            response = await client.post("/mcp", headers=readonly_headers)
+            assert response.status_code == 429
+
+            full_headers = {"Authorization": f"Bearer {http_tokens['primary']}"}
+            response = await client.post("/mcp", headers=full_headers)
+            assert response.status_code != 429
+
+
+@pytest.mark.anyio
+async def test_no_token_skips_rate_limit_and_returns_401(http_app):
+    async with http_app.router.lifespan_context(http_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=http_app),
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post("/mcp")
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_mixed_requests_do_not_log_skipping_limit(
+    catalog_db, http_tokens, monkeypatch, caplog
+):
+    monkeypatch.setenv("GAMEFUNDS_RATE_LIMIT", "60/minute")
+    monkeypatch.setenv("GAMEFUNDS_RATE_LIMIT_READONLY", "300/minute")
+    app = build_http_asgi_app(build_server(transport="http"))
+
+    caplog.set_level(logging.ERROR, logger="slowapi")
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as client:
+            await client.post(
+                "/mcp",
+                headers={"Authorization": f"Bearer {http_tokens['readonly']}"},
+            )
+            await client.post(
+                "/mcp",
+                headers={"Authorization": f"Bearer {http_tokens['primary']}"},
+            )
+            await client.post("/mcp")
+            await client.post(
+                "/mcp",
+                headers={"Authorization": "Bearer definitely-wrong"},
+            )
+
+    noisy = [
+        record.message
+        for record in caplog.records
+        if record.name == "slowapi"
+        and ("Skipping limit" in record.message or "Empty value" in record.message)
+    ]
+    assert noisy == []
 
 
 @pytest.mark.anyio
