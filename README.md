@@ -87,6 +87,15 @@ pip install -e ".[dev]"
 gamefunds sync --apply
 ```
 
+If `gamefunds sync` returns a GitHub **403 rate limit** error, set an unscoped personal access token and retry:
+
+```bash
+export GITHUB_TOKEN=<token>   # no scopes needed — the upstream repo is public
+gamefunds sync --apply
+```
+
+Create a token at [github.com/settings/tokens](https://github.com/settings/tokens) (classic, no checkboxes). Sync uses at most one `api.github.com` call per run; guide files are fetched from `raw.githubusercontent.com` (outside the 60/h unauthenticated API quota).
+
 Stdio mode needs **no** `GAMEFUNDS_TOKEN`. Auth applies only to HTTP transport.
 
 Paths to the database, guides, and logs are resolved from the package install location (not the process cwd). Override with `GAMEFUNDS_DATA_DIR` if needed (e.g. Docker volume at `/app/data`).

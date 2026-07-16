@@ -198,7 +198,9 @@ def build_server(*, transport: Transport = "stdio") -> FastMCP:
         Default `dry_run=True` — shows what would change. Writing requires explicit `dry_run=False`.
         `full_diff=False` returns counts + first 10 changes (diff can be hundreds of rows).
         If the parser fails, NOTHING is saved and you get an error with a line number.
-        Returns: `{has_update, added: int, removed: int, changed: int, sample: [...], applied: bool, parser_error?: str}`."""
+        If GitHub API rate limit is hit: `{rate_limited: true, hint: "...", applied: false}` — tell the
+        user to set `GITHUB_TOKEN` (no scopes needed) and retry.
+        Returns: `{has_update, added: int, removed: int, changed: int, sample: [...], applied: bool, parser_error?: str, rate_limited?: bool, hint?: str}`."""
         return _sync_directory(dry_run=dry_run, full_diff=full_diff)
 
     @server.tool()

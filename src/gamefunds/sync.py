@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,19 @@ BRANCH = "main"
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 API_BASE = f"https://api.github.com/repos/{REPO}"
 
+RATE_LIMIT_HINT = (
+    "GitHub API rate limit reached (60/h without a token). Set GITHUB_TOKEN to "
+    "raise it to 5000/h: export GITHUB_TOKEN=<token> and re-run. A token with "
+    "no scopes works — the directory is public."
+)
+
+
+class GitHubRateLimitError(RuntimeError):
+    """Raised when api.github.com returns 403 with an exhausted rate limit."""
+
+    def __init__(self, message: str = RATE_LIMIT_HINT) -> None:
+        super().__init__(message)
+
 
 def _github_headers() -> dict[str, str]:
     headers: dict[str, str] = {"Accept": "application/vnd.github+json"}
@@ -26,6 +40,18 @@ def _github_headers() -> dict[str, str]:
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
     return headers
+
+
+def _git_blob_sha(data: bytes) -> str:
+    """SHA-1 of a git blob object — matches GitHub Contents API `sha` for the same bytes."""
+    return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+
+
+def _raise_for_github(response: httpx.Response) -> None:
+    remaining = response.headers.get("X-RateLimit-Remaining")
+    if response.status_code == 403 and remaining == "0":
+        raise GitHubRateLimitError(RATE_LIMIT_HINT)
+    response.raise_for_status()
 
 
 def _meta_get(conn, key: str) -> str | None:
@@ -41,7 +67,7 @@ def _fetch_directory_commit(client: httpx.Client) -> dict[str, Any]:
     url = f"{API_BASE}/commits"
     params = {"path": "GameFundingDirectory.md", "per_page": 1}
     r = client.get(url, params=params, headers=_github_headers())
-    r.raise_for_status()
+    _raise_for_github(r)
     data = r.json()
     if not data:
         raise RuntimeError("GitHub API returned no commits for GameFundingDirectory.md")
@@ -56,32 +82,77 @@ def _fetch_directory_commit(client: httpx.Client) -> dict[str, Any]:
     }
 
 
-def _fetch_guide_blob_sha(client: httpx.Client, upstream_name: str) -> str:
-    url = f"{API_BASE}/contents/{upstream_name}"
-    r = client.get(url, headers=_github_headers())
+def _fetch_raw_bytes(client: httpx.Client, upstream_name: str) -> bytes:
+    r = client.get(f"{RAW_BASE}/{upstream_name}")
     r.raise_for_status()
-    data = r.json()
-    sha = data.get("sha")
-    if not sha:
-        raise RuntimeError(f"GitHub API returned no blob sha for {upstream_name}")
-    return sha
+    return r.content
+
+
+def _fetch_raw_text(client: httpx.Client, upstream_name: str) -> str:
+    return _fetch_raw_bytes(client, upstream_name).decode("utf-8")
 
 
 def _load_guide_status(client: httpx.Client, conn) -> dict[str, dict[str, Any]]:
+    """Compare guide versions using raw.githubusercontent.com (does not count toward API quota)."""
     guides: dict[str, dict[str, Any]] = {}
     for upstream in UPSTREAM_GUIDE_FILES:
-        current_sha = _fetch_guide_blob_sha(client, upstream)
+        content = _fetch_raw_bytes(client, upstream)
+        current_sha = _git_blob_sha(content)
         last_sha = _meta_get(conn, guide_sha_meta_key(upstream))
         guides[upstream] = {
             "has_update": current_sha != last_sha,
             "current_sha": current_sha,
             "last_synced_sha": last_sha,
+            "_content": content.decode("utf-8"),
         }
     return guides
 
 
-def check_updates() -> dict[str, Any]:
-    """Check GitHub for newer commits affecting the directory or guide files."""
+def _public_guides(guides: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {
+        name: {k: v for k, v in status.items() if not k.startswith("_")}
+        for name, status in guides.items()
+    }
+
+
+def _rate_limited_payload(*, for_sync: bool = False) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "has_update": False,
+        "rate_limited": True,
+        "hint": RATE_LIMIT_HINT,
+        "current_sha": None,
+        "last_synced_sha": None,
+        "last_synced_at": None,
+        "commit_message": None,
+        "commit_date": None,
+        "directory_has_update": False,
+        "guides_have_update": False,
+        "changed_guides": [],
+        "guides": {},
+    }
+    if for_sync:
+        base.update(
+            {
+                "added": 0,
+                "removed": 0,
+                "changed": 0,
+                "sample": [],
+                "applied": False,
+                "parser_error": None,
+                "guides_added": 0,
+                "guides_updated": 0,
+                "guides_unchanged": 0,
+                "guide_changes": [],
+                "guides_applied": False,
+                "rubric_applied": False,
+                "rubric_parse_error": None,
+            }
+        )
+    return base
+
+
+def _check_updates_impl() -> dict[str, Any]:
+    """Check GitHub for newer commits / guide content. At most one api.github.com call."""
     ensure_db(DEFAULT_DB_PATH)
     with connect(DEFAULT_DB_PATH) as conn:
         last_sha = _meta_get(conn, "last_sync_sha")
@@ -107,13 +178,18 @@ def check_updates() -> dict[str, Any]:
         "guides_have_update": guides_have_update,
         "changed_guides": changed_guides,
         "guides": guides,
+        "rate_limited": False,
     }
 
 
-def _fetch_raw(client: httpx.Client, upstream_name: str) -> str:
-    r = client.get(f"{RAW_BASE}/{upstream_name}")
-    r.raise_for_status()
-    return r.text
+def check_updates() -> dict[str, Any]:
+    """Check GitHub for newer commits affecting the directory or guide files."""
+    try:
+        out = _check_updates_impl()
+    except GitHubRateLimitError:
+        return _rate_limited_payload(for_sync=False)
+    out["guides"] = _public_guides(out["guides"])
+    return out
 
 
 def _should_rebuild_rubrics(
@@ -187,7 +263,9 @@ def _sync_guides(
                 added.append(upstream)
             continue
 
-        content = _fetch_raw(client, upstream)
+        content = status.get("_content")
+        if content is None:
+            content = _fetch_raw_text(client, upstream)
         target.mkdir(parents=True, exist_ok=True)
         local_path.write_text(content, encoding="utf-8")
         if upstream == "PitchDeckTutorial.md":
@@ -234,7 +312,11 @@ def sync_directory(*, dry_run: bool = True, full_diff: bool = False) -> dict[str
     """Fetch, parse, diff, and optionally apply directory and guide updates."""
     ensure_db(DEFAULT_DB_PATH)
 
-    info = check_updates()
+    try:
+        info = _check_updates_impl()
+    except GitHubRateLimitError:
+        return _rate_limited_payload(for_sync=True)
+
     sha = info.get("current_sha")
     guide_status = info.get("guides") or {}
 
@@ -242,9 +324,7 @@ def sync_directory(*, dry_run: bool = True, full_diff: bool = False) -> dict[str
     parsed: list[dict[str, Any]] | None = None
 
     with httpx.Client(timeout=30) as client:
-        md_resp = client.get(f"{RAW_BASE}/GameFundingDirectory.md")
-        md_resp.raise_for_status()
-        md = md_resp.text
+        md = _fetch_raw_text(client, "GameFundingDirectory.md")
 
         try:
             parsed = parse_directory_markdown(md)
@@ -312,5 +392,6 @@ def sync_directory(*, dry_run: bool = True, full_diff: bool = False) -> dict[str
         "sample": sample,
         "applied": applied,
         "parser_error": parser_error,
+        "rate_limited": False,
         **guide_result,
     }
