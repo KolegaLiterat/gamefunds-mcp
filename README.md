@@ -213,22 +213,37 @@ language. If nothing in the catalog matches your genre, `match_project` tells yo
 | `gamefunds sync --apply` | Download directory + guides into local DB |
 | `gamefunds check` | Cheap SHA check for upstream updates |
 | `gamefunds stats` | Entity and pipeline counts |
-| `gamefunds token` | Generate a secure HTTP bearer token |
+| `gamefunds token` | Generate a **full** HTTP token (`GAMEFUNDS_TOKEN`) — do not share |
+| `gamefunds token --readonly` | Generate a **shareable** catalog-only token (`GAMEFUNDS_TOKEN_READONLY`) |
 | `gamefunds serve --transport http` | Run HTTP server (requires token) |
 
 ## HTTP deployment
 
 **HTTPS is mandatory.** A bearer token sent over plain HTTP is visible on the first request. Never expose HTTP publicly without TLS termination.
 
-The server **refuses to start** in HTTP mode without `GAMEFUNDS_TOKEN`:
+The server **refuses to start** in HTTP mode without `GAMEFUNDS_TOKEN`. Full and read-only tokens must be different values.
+
+**Private owner token** (`GAMEFUNDS_TOKEN`) — write access + pipeline visibility. Never publish this.
 
 ```bash
-gamefunds token          # copy output
+gamefunds token          # FULL token — Do NOT share
 export GAMEFUNDS_TOKEN=...
+```
+
+**Shared read-only token** (`GAMEFUNDS_TOKEN_READONLY`) — catalog only; safe to post on a forum or demo. Pipeline tools are refused; `get_entity` omits pipeline data.
+
+```bash
+gamefunds token --readonly   # SAFE to share publicly
+export GAMEFUNDS_TOKEN_READONLY=...
+```
+
+Never publish `GAMEFUNDS_TOKEN` — it exposes your pipeline. Share only the read-only token.
+
+```bash
 gamefunds serve --transport http --port 8080
 ```
 
-Generate `.env` from `.env.example`. Optional **shared read-only** token: `GAMEFUNDS_TOKEN_READONLY` — catalog access only; pipeline data is hidden and pipeline tools are refused with setup instructions.
+Generate `.env` from `.env.example` and set both variables as above.
 
 ### Rate limiting
 

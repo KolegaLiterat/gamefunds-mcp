@@ -7,7 +7,13 @@ import httpx
 import pytest
 
 from fastmcp import Client
-from gamefunds.auth import HTTP_TOKEN_REQUIRED_MSG, build_http_auth_verifier, require_http_token
+from gamefunds.auth import (
+    HTTP_TOKEN_REQUIRED_MSG,
+    TOKENS_MUST_DIFFER_MSG,
+    build_http_auth_verifier,
+    require_http_token,
+)
+from gamefunds.cli import main as cli_main
 from gamefunds.core import set_status
 from gamefunds.db import upsert_entities
 from gamefunds.http_serve import build_http_asgi_app
@@ -61,6 +67,33 @@ def test_http_requires_token_to_start(monkeypatch):
         require_http_token()
     with pytest.raises(RuntimeError, match=HTTP_TOKEN_REQUIRED_MSG):
         build_server(transport="http")
+
+
+def test_http_refuses_identical_full_and_readonly_tokens(monkeypatch):
+    same = secrets.token_urlsafe(32)
+    monkeypatch.setenv("GAMEFUNDS_TOKEN", same)
+    monkeypatch.setenv("GAMEFUNDS_TOKEN_READONLY", same)
+    with pytest.raises(RuntimeError, match=TOKENS_MUST_DIFFER_MSG):
+        require_http_token()
+    with pytest.raises(RuntimeError, match=TOKENS_MUST_DIFFER_MSG):
+        build_server(transport="http")
+
+
+def test_cli_token_full_warns_do_not_share(capsys):
+    assert cli_main(["token"]) == 0
+    out = capsys.readouterr().out
+    assert "Do NOT share" in out
+    assert "GAMEFUNDS_TOKEN" in out
+    assert "gamefunds token --readonly" in out
+    assert "SAFE to share" not in out
+
+
+def test_cli_token_readonly_says_safe_to_share(capsys):
+    assert cli_main(["token", "--readonly"]) == 0
+    out = capsys.readouterr().out
+    assert "SAFE to share" in out
+    assert "GAMEFUNDS_TOKEN_READONLY" in out
+    assert "Do NOT share" not in out
 
 
 @pytest.mark.anyio

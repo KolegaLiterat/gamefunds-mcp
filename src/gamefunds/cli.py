@@ -48,18 +48,25 @@ def cmd_stats() -> int:
     return 0
 
 
-def cmd_token() -> int:
+def cmd_token(*, readonly: bool = False) -> int:
     token = secrets.token_urlsafe(32)
     print("Generated token (copy it now — it is not stored anywhere):")
     print()
     print(token)
     print()
-    print("Add to your environment before starting HTTP transport:")
-    print("  export GAMEFUNDS_TOKEN=<paste-token-here>")
-    print()
-    print("Optional read-only token for clients that must not write pipeline data:")
-    print("  gamefunds token   # run again for a second value")
-    print("  export GAMEFUNDS_TOKEN_READONLY=<paste-second-token-here>")
+    if readonly:
+        print(
+            "Read-only token (catalog only, no pipeline access). SAFE to share publicly,"
+        )
+        print("e.g. on a forum. Put it in GAMEFUNDS_TOKEN_READONLY.")
+        print()
+        print("  export GAMEFUNDS_TOKEN_READONLY=<paste-token-here>")
+    else:
+        print("⚠  FULL token — write access + pipeline visibility. Do NOT share this.")
+        print("Put it in GAMEFUNDS_TOKEN. To share a public/demo token, use:")
+        print("  gamefunds token --readonly")
+        print()
+        print("  export GAMEFUNDS_TOKEN=<paste-token-here>")
     print()
     print("Local stdio usage does not require any tokens.")
     return 0
@@ -86,7 +93,12 @@ def main(argv: list[str] | None = None) -> int:
     sync_p.add_argument("--full-diff", action="store_true", help="Return full diff payload (large)")
 
     sub.add_parser("stats", help="Show DB stats")
-    sub.add_parser("token", help="Generate a secure HTTP bearer token")
+    token_p = sub.add_parser("token", help="Generate a secure HTTP bearer token")
+    token_p.add_argument(
+        "--readonly",
+        action="store_true",
+        help="Generate a shareable catalog-only token (GAMEFUNDS_TOKEN_READONLY)",
+    )
 
     serve_p = sub.add_parser("serve", help="Run the MCP server")
     serve_p.add_argument("--transport", choices=["stdio", "http"], default="stdio")
@@ -101,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "stats":
         return cmd_stats()
     if args.cmd == "token":
-        return cmd_token()
+        return cmd_token(readonly=bool(args.readonly))
     if args.cmd == "serve":
         return cmd_serve(transport=args.transport, host=args.host, port=args.port)
     raise SystemExit(2)

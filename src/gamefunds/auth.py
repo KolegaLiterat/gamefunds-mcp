@@ -7,6 +7,7 @@ from typing import Any
 from fastmcp.server.auth import AccessToken, TokenVerifier
 
 HTTP_TOKEN_REQUIRED_MSG = "HTTP transport requires GAMEFUNDS_TOKEN. Generate one: gamefunds token"
+TOKENS_MUST_DIFFER_MSG = "read-only and full token must differ"
 
 
 class StaticTokenVerifier(TokenVerifier):
@@ -46,6 +47,9 @@ def require_http_token() -> str:
     token = os.getenv("GAMEFUNDS_TOKEN", "").strip()
     if not token:
         raise RuntimeError(HTTP_TOKEN_REQUIRED_MSG)
+    readonly = os.getenv("GAMEFUNDS_TOKEN_READONLY", "").strip()
+    if readonly and token == readonly:
+        raise RuntimeError(TOKENS_MUST_DIFFER_MSG)
     return token
 
 
