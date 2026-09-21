@@ -2,8 +2,6 @@
 
 MCP server for browsing a **local copy** of the [GameFunds](https://github.com/GameDevGrzesiek/GameFunds) directory (publishers, grants, VCs) and tracking your personal outreach pipeline.
 
-[![Listed on CodeGuilds](https://codeguilds.dev/badge/gamefunds-mcp)](https://codeguilds.dev/packages/gamefunds-mcp)
-
 ## What it does — and what it does not
 
 **Does:**
